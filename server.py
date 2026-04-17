@@ -823,7 +823,9 @@ class VoiceSession:
                                         for s in sentences:
                                             s = s.strip()
                                             if s:
-                                                asyncio.create_task(self.stream_tts(s))
+                                                # Serial: don't interleave PCM frames from consecutive
+                                                # sentences on the socket.
+                                                await self.stream_tts(s)
                                                 spoke_anything = True
                                     elif "error" in data:
                                         print(f"[Voice Session] LLM error during agent loop: {data['error']}")
@@ -998,7 +1000,7 @@ CRITICAL INSTRUCTIONS:
                                         # fragment and emit the UI-only final message.
                                         tail = (sentence_buf or "").strip()
                                         if tail:
-                                            asyncio.create_task(self.stream_tts(tail))
+                                            await self.stream_tts(tail)
                                         await self.send_message("final_response", {"text": tool_final_response})
                                     else:
                                         await self.send_final_response(tool_final_response)
@@ -1751,7 +1753,8 @@ async def voice_call(websocket: WebSocket):
                                                         for s in sents:
                                                             s = s.strip()
                                                             if s:
-                                                                asyncio.create_task(session.stream_tts(s))
+                                                                # Serial: see server.py agent-loop note above.
+                                                                await session.stream_tts(s)
                                                                 progressive = True
                                                 if not next_calls:
                                                     break
@@ -1769,7 +1772,7 @@ async def voice_call(websocket: WebSocket):
                                                 if progressive:
                                                     tail = sb.strip()
                                                     if tail:
-                                                        asyncio.create_task(session.stream_tts(tail))
+                                                        await session.stream_tts(tail)
                                                 else:
                                                     await session.stream_tts(synth_text)
                                     else:
