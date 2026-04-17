@@ -263,21 +263,34 @@ class VoiceSession:
                 "content": self.system_prompt,
             }
         ]
+        # Once set, every streaming loop should bail out of its LLM read.
+        # Set by send_message/send_audio_chunk when the WS is gone.
+        self._ws_closed: bool = False
+
+    @property
+    def alive(self) -> bool:
+        """Fast check: can we still send to the client?"""
+        return (not self._ws_closed) and (self.websocket.client_state == WebSocketState.CONNECTED)
 
     async def send_message(self, msg_type: str, data: Dict[str, Any] = None):
         """Send a JSON message to the client."""
+        if self._ws_closed:
+            return False  # silent after the first detection — no log spam
         try:
             # Check if WebSocket is still connected
             if self.websocket.client_state != WebSocketState.CONNECTED:
-                print(f"[Voice Session] Cannot send message '{msg_type}': WebSocket not connected (state: {self.websocket.client_state})")
+                if not self._ws_closed:
+                    print(f"[Voice Session] WS closed while sending '{msg_type}' (state: {self.websocket.client_state})")
+                self._ws_closed = True
                 return False
-            
+
             payload = {"type": msg_type}
             if data:
                 payload.update(data)
             await self.websocket.send_json(payload)
             return True
         except (WebSocketDisconnect, Exception) as e:
+            self._ws_closed = True
             # Handle WebSocket disconnection gracefully
             error_type = type(e).__name__
             if "Disconnect" in error_type or "ConnectionClosed" in error_type or "ClientDisconnected" in error_type:
@@ -288,15 +301,18 @@ class VoiceSession:
 
     async def send_audio_chunk(self, audio_data: bytes):
         """Send binary audio chunk to the client."""
+        if self._ws_closed:
+            return False
         try:
             # Check if WebSocket is still connected
             if self.websocket.client_state != WebSocketState.CONNECTED:
-                print(f"[Voice Session] Cannot send audio chunk: WebSocket not connected (state: {self.websocket.client_state})")
+                self._ws_closed = True
                 return False
-            
+
             await self.websocket.send_bytes(audio_data)
             return True
         except (WebSocketDisconnect, Exception) as e:
+            self._ws_closed = True
             # Handle WebSocket disconnection gracefully
             error_type = type(e).__name__
             if "Disconnect" in error_type or "ConnectionClosed" in error_type or "ClientDisconnected" in error_type:
@@ -603,6 +619,9 @@ class VoiceSession:
 
         try:
             async for chunk in llm.stream_complete(messages, tools=tools):
+                if not self.alive:
+                    print(f"[TTS Pipeline] client disconnected mid-stream, aborting LLM read")
+                    break
                 if chunk.startswith("data: "):
                     try:
                         data = json.loads(chunk[6:])
@@ -731,9 +750,12 @@ class VoiceSession:
                 print(f"[Voice Session] Overlap pipeline returned empty response, continuing...")
 
             async for chunk in llm.stream_complete(messages_for_llm, tools=enabled_tool_defs if enabled_tool_defs else None):
+                if not self.alive:
+                    print(f"[Voice Session] client disconnected mid-stream, aborting main LLM read")
+                    return
                 chunk_count += 1
                 raw_chunks.append(chunk[:100])  # Store first 100 chars for debugging
-                
+
                 if chunk.startswith("data: "):
                     try:
                         data = json.loads(chunk[6:])
@@ -809,6 +831,9 @@ class VoiceSession:
                             spoke_anything = False
                             enabled_tool_defs = get_enabled_tools(self.enabled_tools)
                             for iteration in range(self.MAX_TOOL_ITERATIONS):
+                                if not self.alive:
+                                    print(f"[Voice Session] client disconnected — aborting agent loop")
+                                    return
                                 print(f"[Voice Session] Agent loop iteration {iteration+1}/{self.MAX_TOOL_ITERATIONS}")
                                 followup_messages = list(self.conversation_history)
                                 next_tool_calls = None
@@ -816,6 +841,8 @@ class VoiceSession:
                                     followup_messages,
                                     tools=enabled_tool_defs if enabled_tool_defs else None,
                                 ):
+                                    if not self.alive:
+                                        return
                                     if not chunk.startswith("data: "):
                                         continue
                                     try:
@@ -1742,11 +1769,15 @@ async def voice_call(websocket: WebSocket):
                                             sb = ""
                                             progressive = False
                                             for _ in range(session.MAX_TOOL_ITERATIONS):
+                                                if not session.alive:
+                                                    return
                                                 next_calls = None
                                                 async for chunk in llm.stream_complete(
                                                     list(session.conversation_history),
                                                     tools=enabled_tool_defs if enabled_tool_defs else None,
                                                 ):
+                                                    if not session.alive:
+                                                        return
                                                     if not chunk.startswith("data: "):
                                                         continue
                                                     try:
@@ -1833,7 +1864,11 @@ async def voice_call(websocket: WebSocket):
                     elif msg_type == "disconnect":
                         # Client requested disconnect
                         await session.send_message("disconnect_ack")
-                        await websocket.close()
+                        session._ws_closed = True
+                        try:
+                            await websocket.close()
+                        except Exception:
+                            pass
                         return
                     
                 except json.JSONDecodeError as e:
