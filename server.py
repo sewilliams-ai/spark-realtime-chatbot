@@ -1361,7 +1361,7 @@ async def voice_call(websocket: WebSocket):
         greetings = [
             "Hey! What's up?",
             "Hi there!",
-            "Hey, I'm Spark!",
+            "Hey, Claw here. What's up?",
             "What can I help with?",
             "Hi! Ready when you are.",
         ]
