@@ -199,7 +199,8 @@ ENV PORT=8443 \
     ASR_MODEL=Systran/faster-distil-whisper-large-v3 \
     ASR_DEVICE=cuda \
     ASR_COMPUTE_TYPE=float16 \
-    # TTS Configuration
+    # TTS Configuration — Kokoro on CUDA works on GB10 with torch cu130 wheels
+    TTS_ENGINE=kokoro \
     TTS_DEVICE=cuda \
     KOKORO_LANG=a \
     KOKORO_VOICE=af_bella \

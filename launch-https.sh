@@ -26,6 +26,8 @@ export REASONING_SERVER_URL="${REASONING_SERVER_URL:-http://localhost:11434/v1/c
 export REASONING_MODEL="${REASONING_MODEL:-qwen3.6:35b-a3b}"
 export REASONING_EFFORT="${REASONING_EFFORT:-high}"
 
+export TTS_ENGINE="${TTS_ENGINE:-kokoro}"         # kokoro | chatterbox
+export TTS_DEVICE="${TTS_DEVICE:-cuda}"           # cuda (default, 70× RT on GB10 w/ cu130) | cpu
 export KOKORO_LANG="${KOKORO_LANG:-a}"
 export KOKORO_VOICE="${KOKORO_VOICE:-af_bella}"
 export TTS_OVERLAP="${TTS_OVERLAP:-false}"  # Overlap TTS with LLM streaming

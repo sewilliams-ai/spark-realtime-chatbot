@@ -47,16 +47,18 @@ docker exec rt2 python bench/test_ws_text.py --url ws://localhost:8453/ws/voice 
   --text "What is 2+2 in one word?"
 ```
 
-**TTS backend benchmark** (GB10, N=3 per sentence, Kokoro v0.9.4 CPU vs Chatterbox-Turbo CUDA):
+**TTS backend benchmark** (GB10, N=3 per sentence, torch 2.11 + CUDA 13.0 wheels):
 
-| Sentence length | Kokoro CPU TTFT | Chatterbox CUDA TTFT |
-|-----------------|-----------------|---------------------|
-| 15 chars ("Hey, what's up?") | **476 ms** | 793 ms |
-| 31 chars | **783 ms** | 1134 ms |
-| 81 chars | **1224 ms** | 2148 ms |
-| 189 chars | **2098 ms** | 4741 ms |
+| Sentence length | Kokoro **CUDA** TTFT | Kokoro CPU TTFT | Chatterbox CUDA TTFT |
+|---|---|---|---|
+| 15 chars | **39 ms** | 476 ms | 793 ms |
+| 31 chars | **42 ms** | 783 ms | 1134 ms |
+| 81 chars | **78 ms** | 1224 ms | 2148 ms |
+| 189 chars | **158 ms** | 2098 ms | 4741 ms |
 
-Kokoro wins every bucket today. Chatterbox-Turbo has better voice quality in blind tests but no native streaming and RTF ~0.5 on GB10 (vs Kokoro's 0.2 on CPU). Kokoro on CUDA is currently blocked by pypi-torch nvrtc JIT on sm_121 — when that ships (torch stable with Blackwell wheels, or a locally-built torchaudio against NGC torch 2.10), Kokoro CUDA should beat both by a wide margin. Bench harness:
+Kokoro CUDA runs at RTF ~0.015 (≈ 65× realtime) on GB10 when torch uses the **cu130** wheels — the cu128 wheels ship without sm_121/sm_120 kernels and fall back to torch nvrtc JIT, which crashes on Blackwell. `TTS_DEVICE=cuda` is the default. Chatterbox-Turbo sounds better subjectively but is 2–3× slower per utterance and has no native streaming — kept as an opt-in backend via `TTS_ENGINE=chatterbox`.
+
+Bench harness:
 ```
 docker build -f bench/Dockerfile.tts -t realtime2-tts .
 docker run --rm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \

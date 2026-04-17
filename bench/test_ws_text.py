@@ -22,19 +22,32 @@ async def main():
 
     print(f"→ connecting {args.url}")
     async with websockets.connect(args.url, max_size=None) as ws:
-        # Drain the server's handshake + initial greeting until things quiet down
-        drain_deadline = time.time() + 4.0
-        while time.time() < drain_deadline:
+        # Drain server's initial handshake + greeting until we see tts_done,
+        # or a silent period > 1.5s (meaning: no greeting / greeting finished).
+        hard_deadline = time.time() + 20.0  # generous — Chatterbox TTS can take 5s+
+        last_msg = time.time()
+        saw_tts_done = False
+        while time.time() < hard_deadline:
             try:
-                _ = await asyncio.wait_for(ws.recv(), timeout=max(0.05, drain_deadline - time.time()))
+                raw = await asyncio.wait_for(ws.recv(), timeout=1.5)
             except asyncio.TimeoutError:
+                if time.time() - last_msg > 1.2:
+                    break
                 continue
             except Exception:
                 break
-            drain_deadline = min(drain_deadline, time.time() + 0.5)
+            last_msg = time.time()
+            if isinstance(raw, str):
+                try:
+                    j = json.loads(raw)
+                    if j.get("type") == "tts_done":
+                        saw_tts_done = True
+                        break
+                except Exception:
+                    pass
+        print(f"(drain done, saw_tts_done={saw_tts_done})")
 
         await ws.send(json.dumps({"type": "set_tools", "tools": []}))
-        # Brief pause to let set_tools land
         await asyncio.sleep(0.1)
         await ws.send(json.dumps({"type": "text_message", "text": args.text}))
         print(f"→ sent text_message: {args.text!r}")

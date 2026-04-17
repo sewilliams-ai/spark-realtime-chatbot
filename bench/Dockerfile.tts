@@ -15,8 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3 -m venv /opt/tts_venv && \
     /opt/tts_venv/bin/pip install --upgrade pip
 
-# Match torch+torchaudio from pypi (works on GB10 / sm_121 via cu128 wheels)
-RUN pip install --index-url https://download.pytorch.org/whl/cu128 \
+# cu130 wheels have sm_121 kernels (main branch's proven config).
+# cu128 wheels do NOT — they trip nvrtc on Blackwell JIT paths.
+RUN pip install --index-url https://download.pytorch.org/whl/cu130 \
     torch torchaudio torchvision
 
 # Kokoro (current default) — simple install

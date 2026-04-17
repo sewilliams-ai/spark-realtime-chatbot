@@ -67,7 +67,7 @@ class TTSConfig:
     voice: str = os.getenv("KOKORO_VOICE", "af_bella")
     speed: float = float(os.getenv("KOKORO_SPEED", "1.2"))
     overlap_llm: bool = os.getenv("TTS_OVERLAP", "false").lower() == "true"  # Overlap TTS with LLM streaming
-    device: str = os.getenv("TTS_DEVICE", "cpu")  # "cuda" or "cpu" — CPU default due to GB10+pypi-torch sm_121 JIT
+    device: str = os.getenv("TTS_DEVICE", "cuda")  # "cuda" (default, ~70× realtime on GB10 with torch cu130) or "cpu"
     # Chatterbox-specific
     chatterbox_exaggeration: float = float(os.getenv("CHATTERBOX_EXAGGERATION", "0.5"))
     chatterbox_cfg_weight: float = float(os.getenv("CHATTERBOX_CFG_WEIGHT", "0.5"))
