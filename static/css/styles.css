@@ -969,27 +969,130 @@
         max-width: 92%;
       }
 
-      /* Video call layout */
+      /* Video call layout — mobile: chat takes the whole viewport, camera
+         becomes a FaceTime-style PiP in the bottom-right, controls float in
+         a pill at the bottom center. Tap the PiP to expand it to full screen. */
       .video-chat-wrapper.active {
-        grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
+        display: block;
         height: auto;
-        gap: 1rem;
+        gap: 0;
       }
-
       .video-chat-wrapper .video-call-container {
-        max-height: 50vh;
+        padding: 0;
+        margin: 0;
+        background: none;
+        box-shadow: none;
+        max-height: none;
+        border-radius: 0;
       }
 
+      /* PiP webcam — fixed, small, tap-to-expand */
+      .video-chat-wrapper .video-call-container > .video-call-webcam {
+        position: fixed;
+        bottom: 82px;
+        right: 10px;
+        width: 128px;
+        aspect-ratio: 4/3;
+        margin: 0;
+        z-index: 1800;
+        border: 2px solid rgba(255,255,255,0.35);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+        transition: width 0.25s ease, right 0.25s ease, bottom 0.25s ease, transform 0.25s ease;
+        cursor: pointer;
+      }
+      .video-chat-wrapper .video-call-container > .video-call-webcam.expanded {
+        width: min(94vw, 520px);
+        right: 50%;
+        bottom: 50%;
+        transform: translate(50%, 50%);
+        z-index: 2600;
+      }
+      /* Backdrop when expanded (added via JS ~ .video-webcam-backdrop) */
+      .video-webcam-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.7);
+        z-index: 2500;
+      }
+      .video-webcam-backdrop.active { display: block; }
+
+      /* Hide the in-container status + waveform on mobile; replaced by a tiny
+         pulsing dot on the PiP itself via :before. */
+      .video-chat-wrapper .video-call-container > .video-call-status,
+      .video-chat-wrapper .video-call-container > .video-call-waveform {
+        display: none;
+      }
+
+      /* Tiny status pip on the PiP webcam — coloured dot changes via the
+         container's own .listening / .hearing / .speaking state. */
+      .video-chat-wrapper .video-call-container > .video-call-webcam::after {
+        content: "";
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #00b894;            /* listening green */
+        box-shadow: 0 0 10px rgba(0,184,148,0.6);
+        animation: pulse 2s infinite;
+      }
+      .video-chat-wrapper .video-call-container.hearing > .video-call-webcam::after  { background: #0984e3; box-shadow: 0 0 10px rgba(9,132,227,0.6); }
+      .video-chat-wrapper .video-call-container.speaking > .video-call-webcam::after { background: #fdcb6e; box-shadow: 0 0 10px rgba(253,203,110,0.7); }
+      .video-chat-wrapper .video-call-container.processing > .video-call-webcam::after { background: #a55eea; box-shadow: 0 0 10px rgba(165,94,234,0.6); }
+
+      /* Controls become a floating pill at the bottom center */
+      .video-chat-wrapper .video-call-container > .video-call-controls {
+        position: fixed;
+        left: 50%;
+        bottom: 10px;
+        transform: translateX(-50%);
+        z-index: 1800;
+        background: rgba(15,23,42,0.92);
+        backdrop-filter: blur(10px);
+        padding: 6px 10px;
+        border-radius: 28px;
+        gap: 8px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+      }
+
+      /* PTT container (if toggled on) slides above the control pill */
+      .video-chat-wrapper .video-call-container > .video-call-ptt {
+        position: fixed;
+        left: 50%;
+        bottom: 78px;
+        transform: translateX(-50%);
+        z-index: 1800;
+        margin-top: 0;
+      }
+
+      /* Settings panel, when open, takes a modal overlay rather than pushing
+         chat around — drop into a centered sheet. */
+      .video-chat-wrapper .video-call-container > .video-call-settings-panel {
+        position: fixed;
+        top: 72px;
+        left: 8px;
+        right: 8px;
+        bottom: 140px;
+        z-index: 1900;
+        margin-top: 0;
+        overflow-y: auto;
+        background: rgba(15,23,42,0.96);
+        border-radius: 12px;
+      }
+
+      /* Chat now takes the full page (minus the floating top/bottom bars) */
       .video-chat-wrapper .conversation-container {
-        height: 40vh;
-        min-height: 250px;
+        height: calc(100vh - 140px);
+        min-height: 0;
+        padding-bottom: 72px;        /* leave room above control pill */
       }
 
       .video-call-btn {
-        width: 52px;
-        height: 52px;
-        font-size: 1.3rem;
+        width: 44px;
+        height: 44px;
+        font-size: 1.15rem;
       }
 
       .video-call-ptt-btn {

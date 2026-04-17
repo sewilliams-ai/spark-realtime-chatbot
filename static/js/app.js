@@ -73,6 +73,31 @@ function openMobileTools() {
   }
   cc.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
+
+// PiP webcam — tap to expand to full-screen, tap again (or backdrop) to shrink
+function toggleWebcamPiP() {
+  // Only active on mobile widths where the PiP CSS kicks in
+  if (window.innerWidth > 768) return;
+  const webcam = document.querySelector('.video-chat-wrapper .video-call-container .video-call-webcam');
+  if (!webcam) return;
+  let backdrop = document.getElementById('videoWebcamBackdrop');
+  if (!backdrop) {
+    backdrop = document.createElement('div');
+    backdrop.id = 'videoWebcamBackdrop';
+    backdrop.className = 'video-webcam-backdrop';
+    backdrop.onclick = () => toggleWebcamPiP();
+    document.body.appendChild(backdrop);
+  }
+  const now = !webcam.classList.contains('expanded');
+  webcam.classList.toggle('expanded', now);
+  backdrop.classList.toggle('active', now);
+}
+window.toggleWebcamPiP = toggleWebcamPiP;
+
+document.addEventListener('DOMContentLoaded', () => {
+  const webcamBox = document.querySelector('.video-chat-wrapper .video-call-container .video-call-webcam');
+  if (webcamBox) webcamBox.addEventListener('click', toggleWebcamPiP);
+});
 window.openMobileTools = openMobileTools;
 
 // ========== Energy Gate for Noise Robustness ==========
@@ -916,10 +941,18 @@ function startVideoCallWaveformAnimation() {
 function updateVideoCallStatus(state, text) {
   const statusEl = document.getElementById('videoCallStatus');
   const textEl = document.getElementById('videoCallStatusText');
-  
+
   // Reuse voice-call-status classes for styling
   statusEl.className = `video-call-status voice-call-status ${state}`;
   textEl.textContent = text;
+
+  // Mirror the state onto the container so the mobile PiP-dot CSS
+  // (hearing / speaking / processing) can pick it up.
+  const container = document.getElementById('videoCallContainer');
+  if (container) {
+    container.classList.remove('listening', 'hearing', 'speaking', 'processing');
+    container.classList.add(state);
+  }
 }
 
 async function sendVideoCallData(audioFloat32) {
