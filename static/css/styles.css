@@ -806,8 +806,9 @@
       padding-bottom: 2rem;
     }
 
-    /* ========== Mobile Hamburger Menu ========== */
-    .mobile-menu-btn {
+    /* ========== Mobile Hamburger + Tools Buttons ========== */
+    .mobile-menu-btn,
+    .mobile-tools-btn {
       display: none;
       width: 48px;
       height: 48px;
@@ -824,7 +825,8 @@
       flex-shrink: 0;
     }
 
-    .mobile-menu-btn:hover {
+    .mobile-menu-btn:hover,
+    .mobile-tools-btn:hover {
       background: var(--bg-tertiary);
     }
 
@@ -863,18 +865,28 @@
 
     /* ========== Mobile Breakpoint (768px) ========== */
     @media (max-width: 768px) {
-      /* Show hamburger menu — floating so it stays reachable when the camera
-         panel fills the viewport in video-call mode. */
-      .mobile-menu-btn {
+      /* Floating mobile controls — hamburger (chats) + gear (tools & config) stay
+         reachable when the camera fills the viewport in video-call mode. */
+      .mobile-menu-btn,
+      .mobile-tools-btn {
         display: flex;
         position: fixed;
         top: 8px;
-        left: 8px;
         z-index: 2001;
+        width: 48px;
+        height: 48px;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: var(--radius-md);
         box-shadow: var(--shadow-lg);
         background: rgba(255,255,255,0.92);
         backdrop-filter: blur(6px);
+        font-size: 1.3rem;
+        cursor: pointer;
       }
+      .mobile-menu-btn  { left: 8px; }
+      .mobile-tools-btn { right: 8px; }
 
       /* Sidebar becomes slide-in overlay */
       .chat-sidebar {

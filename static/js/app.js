@@ -62,6 +62,19 @@ function onChatItemClick() {
   }
 }
 
+// Mobile "⚙️" button — expand the Configuration section and scroll to it
+function openMobileTools() {
+  const cc = document.getElementById('configContent');
+  const arrow = document.getElementById('configArrow');
+  if (!cc) return;
+  if (cc.style.display === 'none' || !cc.style.display) {
+    cc.style.display = 'block';
+    if (arrow) arrow.textContent = '▲';
+  }
+  cc.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+window.openMobileTools = openMobileTools;
+
 // ========== Energy Gate for Noise Robustness ==========
 // Minimum RMS energy threshold to accept VAD speech detection
 // Values: 0.001 = very sensitive, 0.01 = moderate, 0.02 = strict
