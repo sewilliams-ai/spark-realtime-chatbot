@@ -29,6 +29,24 @@ python3 bench/test_tools.py        # e2e smoke for every inline tool
 python3 bench/test_agent_loop.py   # e2e parallel-dispatch / math / memory
 ```
 
+**Full-stack end-to-end** (WebSocket `text_message` → Qwen3.6 → Kokoro TTS → audio, warm):
+
+| | Total |
+|--|--|
+| text → final_response text → first TTS chunk | **~1.1 s** |
+
+Reproduce:
+```
+docker build -f bench/Dockerfile.tts -t realtime2-tts .
+docker run -d --gpus all --network host --ipc=host \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -v $(pwd):/workspace/realtime2 -w /workspace/realtime2 \
+  --name rt2 realtime2-tts \
+  uvicorn server:app --host 0.0.0.0 --port 8453
+docker exec rt2 python bench/test_ws_text.py --url ws://localhost:8453/ws/voice \
+  --text "What is 2+2 in one word?"
+```
+
 **TTS backend benchmark** (GB10, N=3 per sentence, Kokoro v0.9.4 CPU vs Chatterbox-Turbo CUDA):
 
 | Sentence length | Kokoro CPU TTFT | Chatterbox CUDA TTFT |

@@ -31,10 +31,9 @@ RUN pip install --no-deps chatterbox-tts conformer s3tokenizer resemble-perth \
         'tokenizers>=0.20,<1' numpy importlib-metadata onnx onnxruntime \
         accelerate regex
 
-# realtime2 server runtime deps (so `from clients.tts import ...` imports
-# without hitting the aiohttp/FastAPI/deepface/etc. walls)
+# realtime2 server runtime deps
 RUN pip install aiohttp fastapi 'uvicorn[standard]' websockets python-multipart \
-    httpx opencv-python-headless
+    httpx opencv-python-headless faster-whisper ctranslate2
 
 WORKDIR /workspace/realtime2
 CMD ["bash"]
