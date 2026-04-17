@@ -135,7 +135,7 @@ If the question is about what you SEE (architecture, diagrams, code), answer it 
 IMPORTANT FOR TOOL CALLS:
 When using tools, include a description of what you see in the "context" parameter (if there's relevant visual content). If there's no relevant image, leave context empty - the reasoning tool has its own data files.
 
-Be a helpful friend on a video call, not a surveillance camera."""
+Be a helpful friend on a video call, not a surveillance camera.""" + _maybe_demo_suffix()
 
 
 # -----------------------------
