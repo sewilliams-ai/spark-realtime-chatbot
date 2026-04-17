@@ -863,9 +863,17 @@
 
     /* ========== Mobile Breakpoint (768px) ========== */
     @media (max-width: 768px) {
-      /* Show hamburger menu */
+      /* Show hamburger menu — floating so it stays reachable when the camera
+         panel fills the viewport in video-call mode. */
       .mobile-menu-btn {
         display: flex;
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        z-index: 2001;
+        box-shadow: var(--shadow-lg);
+        background: rgba(255,255,255,0.92);
+        backdrop-filter: blur(6px);
       }
 
       /* Sidebar becomes slide-in overlay */
@@ -921,9 +929,10 @@
         justify-content: center;
       }
 
-      /* Reduce padding on mobile */
+      /* Reduce padding on mobile; leave room at top-left for the floating menu btn */
       .content-wrapper {
         padding: 0.75rem 1rem;
+        padding-top: 64px;
         padding-bottom: 1rem;
       }
 
