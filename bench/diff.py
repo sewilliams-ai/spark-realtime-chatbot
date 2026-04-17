@@ -16,7 +16,7 @@ def main():
     b = json.loads(open(sys.argv[2]).read())
     print(f"{sys.argv[1]} (sha={a.get('git_sha')}) → {sys.argv[2]} (sha={b.get('git_sha')})\n")
     rows = []
-    for section in ["voice_turn", "video_turn", "reasoning_turn", "tool_call_turn"]:
+    for section in ["voice_turn", "video_turn", "reasoning_turn", "tool_call_turn", "agent_loop_turn"]:
         for metric in ["ttft_ms", "total_ms"]:
             an = (a.get(section) or {}).get(metric) or {}
             bn = (b.get(section) or {}).get(metric) or {}

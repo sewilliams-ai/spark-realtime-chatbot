@@ -190,6 +190,116 @@ def bench_reasoning_turn(trials):
     }
 
 
+def bench_agent_loop_turn(trials):
+    """Measure a full agent loop: LLM call → tool exec → LLM call → final content.
+
+    TTFT here = time from request start to the first content token AFTER any
+    tool-call iterations, i.e. the latency the user actually perceives before
+    hearing the answer. Uses run_python (cheap local tool) to avoid network.
+    """
+    import sys as _sys
+    if str(REPO_ROOT) not in _sys.path:
+        _sys.path.insert(0, str(REPO_ROOT))
+    import tools as tools_mod
+    # Guard: tools must be importable standalone
+    try:
+        tool_def = tools_mod.ALL_TOOLS["run_python"]
+    except Exception as e:
+        return {"skipped": f"tools import failed: {e}"}
+    results = []
+    for i in range(trials):
+        messages = [
+            {"role": "system", "content": "Use the run_python tool for math, then answer briefly."},
+            {"role": "user", "content": "Use run_python to compute 137 * 42, then tell me the result in one short sentence."},
+        ]
+        t0 = time.perf_counter()
+        ttft_ms = None
+        iterations = 0
+        final_text = ""
+        while iterations < 4:
+            iterations += 1
+            resp = urllib.request.Request(
+                OLLAMA_URL,
+                data=json.dumps({
+                    "model": MODEL,
+                    "messages": messages,
+                    "tools": [tool_def],
+                    "tool_choice": "auto",
+                    "stream": True,
+                    "max_tokens": 400,
+                    "reasoning_effort": "none",
+                }).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            accum_tool_calls = {}
+            content_piece = ""
+            with urllib.request.urlopen(resp, timeout=60) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", errors="ignore").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    body = line[5:].strip()
+                    if body == "[DONE]":
+                        break
+                    try:
+                        j = json.loads(body)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = j.get("choices") or []
+                    if not choices:
+                        continue
+                    d = choices[0].get("delta") or {}
+                    if d.get("content"):
+                        if ttft_ms is None:
+                            ttft_ms = (time.perf_counter() - t0) * 1000
+                        content_piece += d["content"]
+                    for part in d.get("tool_calls") or []:
+                        idx = part.get("index", 0)
+                        slot = accum_tool_calls.setdefault(idx, {"id": part.get("id", ""), "name": "", "args": ""})
+                        fn = part.get("function") or {}
+                        if fn.get("name"):
+                            slot["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            slot["args"] += fn["arguments"]
+            if not accum_tool_calls:
+                final_text = content_piece
+                break
+            # Execute tool calls inline (subprocess path, fast)
+            messages.append({
+                "role": "assistant", "content": None,
+                "tool_calls": [
+                    {"id": s["id"], "type": "function",
+                     "function": {"name": s["name"], "arguments": s["args"]}}
+                    for s in accum_tool_calls.values()
+                ],
+            })
+            for s in accum_tool_calls.values():
+                # Inline execute — not using asyncio to keep bench simple
+                import asyncio as _asy
+                loop = _asy.new_event_loop()
+                try:
+                    result = loop.run_until_complete(
+                        __import__('tools').execute_tool(s["name"], json.loads(s["args"] or "{}")))
+                finally:
+                    loop.close()
+                messages.append({
+                    "role": "tool", "tool_call_id": s["id"], "name": s["name"], "content": result,
+                })
+        total_ms = (time.perf_counter() - t0) * 1000
+        results.append({
+            "ttft_ms": ttft_ms,
+            "total_ms": total_ms,
+            "iterations": iterations,
+            "content_chars": len(final_text),
+        })
+        print(f"  agent_loop_turn[{i+1}/{trials}] iters={iterations} ttft={ttft_ms:.0f}ms total={total_ms:.0f}ms text={final_text[:60]!r}", file=sys.stderr)
+    return {
+        "ttft_ms": _summary(results, "ttft_ms"),
+        "total_ms": _summary(results, "total_ms"),
+        "iterations": _summary(results, "iterations"),
+    }
+
+
 def bench_tool_call_turn(trials):
     tools = [{
         "type": "function",
@@ -248,7 +358,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--trials", type=int, default=5)
     ap.add_argument("--out", type=str, default=None)
-    ap.add_argument("--only", choices=["voice", "video", "reasoning", "tool"], default=None)
+    ap.add_argument("--only", choices=["voice", "video", "reasoning", "tool", "agent"], default=None)
     args = ap.parse_args()
 
     _warmup()
@@ -274,6 +384,9 @@ def main():
     if args.only in (None, "tool"):
         print("[bench] tool_call_turn", file=sys.stderr)
         out["tool_call_turn"] = bench_tool_call_turn(args.trials)
+    if args.only in (None, "agent"):
+        print("[bench] agent_loop_turn", file=sys.stderr)
+        out["agent_loop_turn"] = bench_agent_loop_turn(max(3, args.trials))
 
     print(json.dumps(out, indent=2))
     if args.out:

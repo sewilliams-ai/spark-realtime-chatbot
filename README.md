@@ -11,16 +11,23 @@ A voice + vision AI assistant running locally on DGX Spark — streaming speech 
 - **Agentic**: streaming multi-turn tool-call loop (filesystem, Python sandbox, web search, memory)
 - **Face recognition**: DeepFace enrollment + identification in video-call mode
 
-**Benchmarked on DGX Spark (warm, Q4_K_M Qwen3.6-35B-A3B via Ollama)**
+**Benchmarked on DGX Spark (warm, Q4_K_M Qwen3.6-35B-A3B via Ollama, N=5)**
 
 | Path | TTFT (median) | End-to-end (median) |
 |------|---------------|---------------------|
 | Voice turn (effort=none) | ~225 ms | ~365 ms |
 | Video turn (image+text, effort=none) | ~880 ms | ~1340 ms |
-| Tool-call roundtrip | ~840 ms | ~840 ms |
+| Tool-call roundtrip (1 tool declared) | ~840 ms | ~840 ms |
+| Agent loop (LLM → run_python → LLM) | ~1550 ms | ~1860 ms |
 | Reasoning turn (effort=high, ~4k chars thinking) | — | ~20 s |
 
-Reproduce: `python3 bench/bench.py --trials 5 --out bench/after.json`, then `python3 bench/diff.py bench/baseline.json bench/after.json`.
+Reproduce:
+```
+python3 bench/bench.py --trials 5 --out bench/after.json
+python3 bench/diff.py bench/baseline.json bench/after.json
+python3 bench/test_tools.py        # e2e smoke for every inline tool
+python3 bench/test_agent_loop.py   # e2e parallel-dispatch / math / memory
+```
 
 ---
 

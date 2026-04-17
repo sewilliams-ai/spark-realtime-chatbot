@@ -791,8 +791,11 @@ class VoiceSession:
 
                             # Multi-iteration agent loop: re-stream the model, execute any new tool
                             # calls in parallel, repeat until we get a plain-content response or
-                            # hit MAX_TOOL_ITERATIONS.
+                            # hit MAX_TOOL_ITERATIONS. Content streams to TTS sentence-by-sentence
+                            # as it arrives — no accumulate-then-speak delay.
                             tool_final_response = ""
+                            sentence_buf = ""
+                            spoke_anything = False
                             enabled_tool_defs = get_enabled_tools(self.enabled_tools)
                             for iteration in range(self.MAX_TOOL_ITERATIONS):
                                 print(f"[Voice Session] Agent loop iteration {iteration+1}/{self.MAX_TOOL_ITERATIONS}")
@@ -812,7 +815,16 @@ class VoiceSession:
                                         next_tool_calls = data["tool_calls_complete"]
                                         break
                                     if "content" in data and data["content"]:
-                                        tool_final_response += data["content"]
+                                        piece = data["content"]
+                                        tool_final_response += piece
+                                        sentence_buf += piece
+                                        # Progressive TTS: speak each complete sentence as it forms
+                                        sentences, sentence_buf = self._extract_complete_sentences(sentence_buf)
+                                        for s in sentences:
+                                            s = s.strip()
+                                            if s:
+                                                asyncio.create_task(self.stream_tts(s))
+                                                spoke_anything = True
                                     elif "error" in data:
                                         print(f"[Voice Session] LLM error during agent loop: {data['error']}")
                                 if not next_tool_calls:
@@ -977,14 +989,20 @@ CRITICAL INSTRUCTIONS:
                                 tool_final_response = tool_final_response.replace("<|end|>", "")
                                 tool_final_response = tool_final_response.replace("<|start|>assistant", "")
                                 tool_final_response = tool_final_response.strip()
-                                
+
                                 if tool_final_response:
                                     print(f"[Voice Session] Tool execution final response: {tool_final_response[:100]}...")
-                                    # Add to conversation history
                                     self.conversation_history.append({"role": "assistant", "content": tool_final_response})
-                                    # Regular tool - send final response and TTS
-                                    await self.send_final_response(tool_final_response)
-                                    return  # Exit early since we've handled tool execution
+                                    if spoke_anything:
+                                        # Already streamed sentence-by-sentence. Flush the trailing
+                                        # fragment and emit the UI-only final message.
+                                        tail = (sentence_buf or "").strip()
+                                        if tail:
+                                            asyncio.create_task(self.stream_tts(tail))
+                                        await self.send_message("final_response", {"text": tool_final_response})
+                                    else:
+                                        await self.send_final_response(tool_final_response)
+                                    return
                                 else:
                                     print(f"[Voice Session] Tool execution response was empty after processing")
                             else:
@@ -1708,6 +1726,8 @@ async def voice_call(websocket: WebSocket):
                                                 session.conversation_history.append(tr)
 
                                             synth_text = ""
+                                            sb = ""
+                                            progressive = False
                                             for _ in range(session.MAX_TOOL_ITERATIONS):
                                                 next_calls = None
                                                 async for chunk in llm.stream_complete(
@@ -1724,7 +1744,15 @@ async def voice_call(websocket: WebSocket):
                                                         next_calls = d["tool_calls_complete"]
                                                         break
                                                     if "content" in d and d["content"]:
-                                                        synth_text += d["content"]
+                                                        piece = d["content"]
+                                                        synth_text += piece
+                                                        sb += piece
+                                                        sents, sb = session._extract_complete_sentences(sb)
+                                                        for s in sents:
+                                                            s = s.strip()
+                                                            if s:
+                                                                asyncio.create_task(session.stream_tts(s))
+                                                                progressive = True
                                                 if not next_calls:
                                                     break
                                                 await session.send_message("tool_invocation", {"message": "One moment…"})
@@ -1738,7 +1766,12 @@ async def voice_call(websocket: WebSocket):
                                             if synth_text.strip():
                                                 session.conversation_history.append({"role": "assistant", "content": synth_text})
                                                 await session.send_message("llm_final", {"text": synth_text})
-                                                await session.stream_tts(synth_text)
+                                                if progressive:
+                                                    tail = sb.strip()
+                                                    if tail:
+                                                        asyncio.create_task(session.stream_tts(tail))
+                                                else:
+                                                    await session.stream_tts(synth_text)
                                     else:
                                         # Regular response - speak it
                                         if response_text:
