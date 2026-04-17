@@ -1082,10 +1082,14 @@
         border-radius: 12px;
       }
 
-      /* Chat now takes the full page (minus the floating top/bottom bars) */
+      /* Chat now takes the full page (minus the floating top/bottom bars).
+         Base .conversation-container sets max-height:70vh + min-height:350px +
+         margin-top:1rem; override all three so the chat really spans full height. */
       .video-chat-wrapper .conversation-container {
         height: calc(100vh - 140px);
         min-height: 0;
+        max-height: none;
+        margin-top: 0;
         padding-bottom: 72px;        /* leave room above control pill */
       }
 
