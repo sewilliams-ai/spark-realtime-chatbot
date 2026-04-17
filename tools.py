@@ -138,6 +138,43 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
             },
         },
     },
+    "ask_claw": {
+        "type": "function",
+        "function": {
+            "name": "ask_claw",
+            "description": (
+                "Delegate a real-world action or personal-assistant task to Claw, the local "
+                "OpenClaw agent running on this machine. Claw has persistent memory of the "
+                "user, access to their TODO list, calendar, messaging apps (Telegram, "
+                "iMessage, Slack, Discord, WhatsApp), browser automation, and ~50 other "
+                "skills. Use this whenever the user says something like "
+                "'add to my todos', 'remind me', 'text <person>', 'search the web for', "
+                "'put it on my calendar', or any other task that requires state or "
+                "integrations outside this voice session. Claw typically takes 5-30 seconds."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": (
+                            "The instruction for Claw, phrased as you would say it to a "
+                            "personal assistant. Include any context from the current "
+                            "conversation or what the camera sees — Claw does not see the "
+                            "camera. Example: 'add \"buy the basil sauce I saw\" to my todo "
+                            "list', or 'text Anja: running 10 minutes late'."
+                        ),
+                    },
+                    "thinking": {
+                        "type": "string",
+                        "enum": ["off", "minimal", "low", "medium", "high"],
+                        "description": "Reasoning effort. Default 'low' is fine; use 'medium' for planning-heavy asks.",
+                    },
+                },
+                "required": ["message"],
+            },
+        },
+    },
 
     # ----- UI agent tools (kept for back-compat with existing frontend) -----
     "markdown_assistant": {
@@ -439,6 +476,99 @@ async def _tool_recall_fact(args: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# OpenClaw bridge (ask_claw)
+# ---------------------------------------------------------------------------
+
+# Known openclaw CLI locations. Env override wins; then PATH; then common installs.
+_OPENCLAW_CANDIDATES = [
+    os.environ.get("OPENCLAW_BIN"),
+    "openclaw",
+    "/home/nvidia/.nvm/versions/node/v22.22.1/bin/openclaw",
+    "/usr/local/bin/openclaw",
+]
+
+
+def _find_openclaw() -> str | None:
+    import shutil
+    for c in _OPENCLAW_CANDIDATES:
+        if not c:
+            continue
+        if "/" in c and Path(c).exists():
+            return c
+        p = shutil.which(c)
+        if p:
+            return p
+    return None
+
+
+async def _tool_ask_claw(args: Dict[str, Any]) -> str:
+    message = (args.get("message") or "").strip()
+    thinking = args.get("thinking") or "low"
+    if not message:
+        return json.dumps({"error": "message required"})
+    claw = _find_openclaw()
+    if not claw:
+        return json.dumps({
+            "error": "openclaw CLI not found; set OPENCLAW_BIN or install openclaw",
+        })
+    agent = os.environ.get("OPENCLAW_AGENT", "main")
+    timeout_s = int(os.environ.get("OPENCLAW_TIMEOUT", "120"))
+    cmd = [
+        claw, "agent", "--local", "--agent", agent,
+        "--message", message,
+        "--thinking", thinking,
+        "--json", "--timeout", str(timeout_s),
+    ]
+    t0 = time.perf_counter()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 10)
+    except asyncio.TimeoutError:
+        try: proc.kill()
+        except Exception: pass
+        return json.dumps({"error": f"claw timed out after {timeout_s}s"})
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    if proc.returncode != 0:
+        return json.dumps({
+            "error": f"openclaw exit {proc.returncode}",
+            "stderr": _truncate(stderr_b.decode("utf-8", errors="replace"), 600),
+            "elapsed_ms": round(elapsed_ms, 1),
+        })
+    # OpenClaw may print ANSI banners to stdout before the JSON; scan for the
+    # first '{' that starts a valid top-level object.
+    raw = stdout_b.decode("utf-8", errors="replace")
+    start = raw.find("{")
+    parsed = None
+    if start != -1:
+        try:
+            parsed = json.loads(raw[start:])
+        except json.JSONDecodeError:
+            pass
+    if parsed is None:
+        return json.dumps({
+            "error": "could not parse openclaw JSON output",
+            "tail": _truncate(raw[-400:], 400),
+            "elapsed_ms": round(elapsed_ms, 1),
+        })
+    # Canonical reply lives at payloads[0].text (observed for qwen3.6 via local-proxy)
+    reply_parts = []
+    for p in parsed.get("payloads") or []:
+        t = p.get("text")
+        if isinstance(t, str) and t.strip():
+            reply_parts.append(t.strip())
+    stop = ((parsed.get("agent") or {}).get("result") or {}).get("stopReason")
+    return json.dumps({
+        "reply": _truncate("\n\n".join(reply_parts) or "(no reply)", 4000),
+        "stop_reason": stop,
+        "elapsed_ms": round(elapsed_ms, 1),
+    })
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -450,6 +580,7 @@ _INLINE_DISPATCH = {
     "web_search":    _tool_web_search,
     "remember_fact": _tool_remember_fact,
     "recall_fact":   _tool_recall_fact,
+    "ask_claw":      _tool_ask_claw,
 }
 
 
