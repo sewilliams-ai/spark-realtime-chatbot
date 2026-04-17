@@ -152,6 +152,61 @@ The pattern: **realtime2 is the eyes and voice, Claw is the identity and hands.*
 | `OPENCLAW_AGENT` | `main` | which Claw agent to target (only `main` exists today) |
 | `OPENCLAW_TIMEOUT` | `120` | seconds the CLI may run before we kill it |
 
+## Live full-stack demo numbers (WebSocket → ASR/Qwen/Kokoro → fast-path tools)
+
+Measured through the actual running server, `bench/test_ws_text.py` against a
+docker-compose'd realtime2 stack (Kokoro CUDA, Ollama :11434 host, OpenClaw
+mounted into the container so `openclaw` binary is reachable):
+
+| prompt | total | TTFT | outcome |
+|---|---|---|---|
+| "Please add 'grab lunch with Sarah Friday' to my todo list." | **4.2 s** | **1.8 s** | T25 added ✅ |
+| "What's on my todo list for today?" | **4.4 s** | **1.4 s** | 6 items read aloud ✅ |
+| "Mark 'grab lunch with Sarah Friday' as done." | **3.6 s** | **1.4 s** | T25 completed ✅ |
+
+Timeline the user experiences for "add todo":
+
+```
+t=0       ↓ user finishes speaking
+t=~0.3 s    ASR transcript
+t=~1.5 s    Qwen3.6 decides to call add_todo → server emits
+            "on it" announcement → TTS starts speaking the ack
+t=~1.54 s   easy-todo CLI completes (35 ms)
+t=~2.5 s    Qwen3.6 narrates confirmation → Kokoro CUDA synth starts
+t=~2.6 s    User hears "I've added 'grab lunch with Sarah Friday' to your todo list"
+```
+
+Demo container recipe:
+
+```bash
+# 1) Build the runtime image if you don't have it yet
+docker build -f bench/Dockerfile.tts -t realtime2-tts .
+
+# 2) Run the server with OpenClaw mounted in
+docker run -d --gpus all --network host --ipc=host --name rt2 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -v $(pwd):/workspace/realtime2 \
+  -v ~/.openclaw:/root/.openclaw \
+  -v ~/.nvm/versions/node/v22.22.1:/opt/node \
+  -e TTS_ENGINE=kokoro -e TTS_DEVICE=cuda \
+  -e LLM_SERVER_URL=http://localhost:11434/v1/chat/completions \
+  -e LLM_MODEL=qwen3.6:35b-a3b -e VLM_MODEL=qwen3.6:35b-a3b \
+  -e VLM_SERVER_URL=http://localhost:11434/v1/chat/completions \
+  -e ASR_MODE=local -e ASR_MODEL=Systran/faster-whisper-small.en \
+  -e OPENCLAW_BIN=/opt/node/bin/openclaw \
+  -e OPENCLAW_WORKSPACE=/root/.openclaw/workspace \
+  -e OPENCLAW_CONFIG=/root/.openclaw/openclaw.json \
+  -w /workspace/realtime2 \
+  realtime2-tts:latest \
+  bash -c 'export PATH=/opt/node/bin:$PATH && exec uvicorn server:app --host 0.0.0.0 --port 8453'
+
+# 3) Fire a demo turn
+docker exec rt2 python bench/test_ws_text.py \
+  --url ws://localhost:8453/ws/voice \
+  --tools add_todo,list_todos,complete_todo,send_telegram,ask_claw \
+  --text "Add 'grab coffee with Ravi tomorrow at 10' to my todo list."
+```
+
 ## Reproduce the end-to-end smoke test
 
 ```bash

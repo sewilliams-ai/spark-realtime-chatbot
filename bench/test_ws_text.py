@@ -18,6 +18,8 @@ async def main():
     ap.add_argument("--url", default="ws://localhost:8453/ws/voice")
     ap.add_argument("--text", default="What's 2 plus 2?")
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--tools", default="",
+                    help="Comma-separated tool ids to enable (e.g. add_todo,list_todos)")
     args = ap.parse_args()
 
     print(f"→ connecting {args.url}")
@@ -47,7 +49,8 @@ async def main():
                     pass
         print(f"(drain done, saw_tts_done={saw_tts_done})")
 
-        await ws.send(json.dumps({"type": "set_tools", "tools": []}))
+        tools = [t.strip() for t in args.tools.split(",") if t.strip()]
+        await ws.send(json.dumps({"type": "set_tools", "tools": tools}))
         await asyncio.sleep(0.1)
         await ws.send(json.dumps({"type": "text_message", "text": args.text}))
         print(f"→ sent text_message: {args.text!r}")
