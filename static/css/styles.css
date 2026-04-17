@@ -1536,6 +1536,9 @@
       margin-bottom: 1rem;
       position: relative;
       aspect-ratio: 4/3;
+      /* Reserve the box early so other elements changing height/width don't
+         trigger an aspect-ratio recomputation that visibly shrinks/grows. */
+      contain: layout;
     }
 
     .video-call-webcam video {
@@ -1563,6 +1566,9 @@
       display: flex;
       align-items: center;
       gap: 0.5rem;
+      /* Stable height so a text swap (Listening→Hearing you→Speaking) doesn't
+         change line-count and reflow the rest of the column. */
+      min-height: 1.5em;
     }
 
     .video-call-waveform {
@@ -1570,8 +1576,10 @@
       align-items: center;
       justify-content: center;
       gap: 3px;
-      height: 50px;
+      height: 80px;               /* tall enough for the max bar height */
       margin-bottom: 1rem;
+      overflow: hidden;           /* clip bars that animate past the box */
+      contain: layout size;       /* don't let internal changes reflow neighbors */
     }
 
     .video-call-waveform .bar {
