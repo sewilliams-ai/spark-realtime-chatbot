@@ -138,6 +138,89 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
             },
         },
     },
+    # Fast-path Claw tools (skip Claw's LLM and hit the skill CLI directly; ~35 ms).
+    # Prefer these for common actions. Fall back to ask_claw only if no fast path fits.
+    "add_todo": {
+        "type": "function",
+        "function": {
+            "name": "add_todo",
+            "description": (
+                "Add a task to Kedar's TODO list (Claw's easy-todo skill) directly, "
+                "without going through the Claw agent. Use this when the user says "
+                "'add X to my todos', 'remind me to X', 'remember to X', or similar. "
+                "Runs in ~35 ms. Prefer this over ask_claw for any todo-adding request."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short title for the task."},
+                    "notes": {"type": "string", "description": "Optional longer notes / context."},
+                    "due":   {"type": "string", "description": "Optional due date (YYYY-MM-DD)."},
+                    "priority": {"type": "string", "enum": ["high", "medium", "low"], "description": "Optional priority."},
+                    "tags":  {"type": "array", "items": {"type": "string"}, "description": "Optional tags."},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    "list_todos": {
+        "type": "function",
+        "function": {
+            "name": "list_todos",
+            "description": (
+                "List Kedar's TODO items (Claw's easy-todo skill). Fast path — no Claw "
+                "agent hop. Use when the user asks 'what's on my list', 'what's due "
+                "today', etc."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filter": {"type": "string", "enum": ["all", "today", "upcoming", "completed", "recurring"],
+                               "description": "Which subset to list. Default 'all'."},
+                    "days":   {"type": "integer", "description": "For filter=upcoming, how many days out."},
+                },
+                "required": [],
+            },
+        },
+    },
+    "complete_todo": {
+        "type": "function",
+        "function": {
+            "name": "complete_todo",
+            "description": (
+                "Mark a TODO item complete. Accepts either its id (like 'T17') or the full title. "
+                "Fast path — no Claw agent hop."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id_or_title": {"type": "string", "description": "Todo id (T17) or title substring."},
+                },
+                "required": ["id_or_title"],
+            },
+        },
+    },
+    "send_telegram": {
+        "type": "function",
+        "function": {
+            "name": "send_telegram",
+            "description": (
+                "Send a Telegram message directly via Kedar's configured Claw bot. Fast "
+                "path — no Claw agent hop, no LLM turn. Use for 'text/message/ping <person>' "
+                "requests. Requires a Telegram chat_id (numeric) or one of Kedar's saved "
+                "contact aliases. If you don't know the chat_id, delegate via ask_claw instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Message body."},
+                    "chat_id": {"type": "string",
+                                "description": "Telegram chat_id (numeric) or saved alias (e.g. 'kedar')."},
+                },
+                "required": ["text"],
+            },
+        },
+    },
     "ask_claw": {
         "type": "function",
         "function": {
@@ -147,10 +230,10 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
                 "OpenClaw agent running on this machine. Claw has persistent memory of the "
                 "user, access to their TODO list, calendar, messaging apps (Telegram, "
                 "iMessage, Slack, Discord, WhatsApp), browser automation, and ~50 other "
-                "skills. Use this whenever the user says something like "
-                "'add to my todos', 'remind me', 'text <person>', 'search the web for', "
-                "'put it on my calendar', or any other task that requires state or "
-                "integrations outside this voice session. Claw typically takes 5-30 seconds."
+                "skills. FALLBACK ONLY — prefer the fast-path tools (add_todo, list_todos, "
+                "complete_todo, send_telegram) when they apply. Use ask_claw only if no fast "
+                "path fits (e.g. web_search, cron reminders, apple-notes, custom skills). "
+                "Claw takes 5-30 seconds."
             ),
             "parameters": {
                 "type": "object",
@@ -476,6 +559,162 @@ async def _tool_recall_fact(args: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Claw fast-path tools — hit the skill CLIs directly, skip the Claw LLM turn
+# ---------------------------------------------------------------------------
+
+CLAW_WORKSPACE = Path(os.environ.get("OPENCLAW_WORKSPACE", os.path.expanduser("~/.openclaw/workspace")))
+CLAW_CONFIG_JSON = Path(os.environ.get("OPENCLAW_CONFIG", os.path.expanduser("~/.openclaw/openclaw.json")))
+EASY_TODO_CLI = CLAW_WORKSPACE / "skills" / "easy-todo" / "cli.js"
+
+
+async def _run_cmd(argv: List[str], timeout_s: int = 15) -> Dict[str, Any]:
+    t0 = time.perf_counter()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        try: proc.kill()
+        except Exception: pass
+        return {"error": f"command timed out after {timeout_s}s", "argv": argv}
+    return {
+        "stdout": out_b.decode("utf-8", errors="replace").strip(),
+        "stderr": err_b.decode("utf-8", errors="replace").strip(),
+        "exit_code": proc.returncode,
+        "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+    }
+
+
+async def _tool_add_todo(args: Dict[str, Any]) -> str:
+    title = (args.get("title") or "").strip()
+    if not title:
+        return json.dumps({"error": "title required"})
+    if not EASY_TODO_CLI.exists():
+        return json.dumps({"error": f"easy-todo cli not found at {EASY_TODO_CLI}"})
+    argv = ["node", str(EASY_TODO_CLI), "add", title]
+    if args.get("due"):      argv += ["--due", str(args["due"])]
+    if args.get("priority"): argv += ["--priority", str(args["priority"])]
+    if args.get("notes"):    argv += ["--notes", str(args["notes"])]
+    tags = args.get("tags")
+    if tags:
+        if isinstance(tags, list): tags = ",".join(str(t) for t in tags)
+        argv += ["--tags", str(tags)]
+    r = await _run_cmd(argv)
+    if r.get("error"): return json.dumps(r)
+    # Easy-todo prints "Added T<id>: <title> [priority]"
+    return json.dumps({
+        "ok": r["exit_code"] == 0,
+        "message": r["stdout"] or r["stderr"],
+        "elapsed_ms": r["elapsed_ms"],
+    })
+
+
+async def _tool_list_todos(args: Dict[str, Any]) -> str:
+    if not EASY_TODO_CLI.exists():
+        return json.dumps({"error": f"easy-todo cli not found at {EASY_TODO_CLI}"})
+    argv = ["node", str(EASY_TODO_CLI), "list"]
+    flt = (args.get("filter") or "all").lower()
+    if flt == "today":      argv.append("--today")
+    elif flt == "upcoming":
+        argv.append("--upcoming")
+        if args.get("days"): argv += ["--days", str(int(args["days"]))]
+    elif flt == "completed": argv.append("--completed")
+    elif flt == "recurring": argv.append("--recurring")
+    r = await _run_cmd(argv)
+    if r.get("error"): return json.dumps(r)
+    return json.dumps({
+        "ok": r["exit_code"] == 0,
+        "list": _truncate(r["stdout"], 3000),
+        "elapsed_ms": r["elapsed_ms"],
+    })
+
+
+async def _tool_complete_todo(args: Dict[str, Any]) -> str:
+    ref = (args.get("id_or_title") or "").strip()
+    if not ref:
+        return json.dumps({"error": "id_or_title required"})
+    if not EASY_TODO_CLI.exists():
+        return json.dumps({"error": f"easy-todo cli not found at {EASY_TODO_CLI}"})
+    r = await _run_cmd(["node", str(EASY_TODO_CLI), "complete", ref])
+    if r.get("error"): return json.dumps(r)
+    return json.dumps({
+        "ok": r["exit_code"] == 0,
+        "message": r["stdout"] or r["stderr"],
+        "elapsed_ms": r["elapsed_ms"],
+    })
+
+
+def _load_telegram_config() -> Dict[str, Any]:
+    try:
+        d = json.loads(CLAW_CONFIG_JSON.read_text())
+    except Exception:
+        return {}
+    tg = (d.get("channels") or {}).get("telegram") or {}
+    return tg
+
+
+async def _tool_send_telegram(args: Dict[str, Any]) -> str:
+    text = (args.get("text") or "").strip()
+    chat_id = (args.get("chat_id") or "").strip()
+    if not text:
+        return json.dumps({"error": "text required"})
+    tg = _load_telegram_config()
+    token = tg.get("botToken")
+    if not token:
+        return json.dumps({"error": "no Telegram bot token configured in openclaw.json"})
+    # Resolve alias → chat_id via TOOLS.md / contacts if present
+    if chat_id and not chat_id.lstrip("-").isdigit():
+        resolved = _resolve_telegram_alias(tg, chat_id)
+        if not resolved:
+            return json.dumps({
+                "error": f"unknown alias '{chat_id}'; pass a numeric chat_id or fall back to ask_claw"
+            })
+        chat_id = resolved
+    if not chat_id:
+        # Best guess: first allowFrom entry (usually the owner's DM)
+        candidates = tg.get("allowFrom") or tg.get("dmAllowFrom") or []
+        if candidates:
+            chat_id = str(candidates[0])
+    if not chat_id:
+        return json.dumps({"error": "chat_id required and no default found in openclaw config"})
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                body = await r.json()
+                ok = body.get("ok", False)
+                return json.dumps({
+                    "ok": ok,
+                    "chat_id": chat_id,
+                    "error": None if ok else body.get("description", f"HTTP {r.status}"),
+                })
+    except Exception as e:
+        return json.dumps({"error": f"telegram send failed: {e}"})
+
+
+def _resolve_telegram_alias(tg: Dict[str, Any], alias: str) -> str | None:
+    """Look up a saved contact/alias → chat_id in openclaw.json."""
+    alias = alias.lower()
+    contacts = tg.get("contacts") or tg.get("aliases") or {}
+    if isinstance(contacts, dict):
+        # direct key lookup
+        for k, v in contacts.items():
+            if str(k).lower() == alias:
+                return str(v)
+    pairings = tg.get("pairings") or {}
+    if isinstance(pairings, dict):
+        for v in pairings.values():
+            if isinstance(v, dict) and str(v.get("alias", "")).lower() == alias:
+                cid = v.get("chatId") or v.get("chat_id")
+                if cid: return str(cid)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # OpenClaw bridge (ask_claw)
 # ---------------------------------------------------------------------------
 
@@ -580,6 +819,12 @@ _INLINE_DISPATCH = {
     "web_search":    _tool_web_search,
     "remember_fact": _tool_remember_fact,
     "recall_fact":   _tool_recall_fact,
+    # Claw fast-paths — direct skill CLIs, no Claw LLM hop (~35 ms)
+    "add_todo":       _tool_add_todo,
+    "list_todos":     _tool_list_todos,
+    "complete_todo":  _tool_complete_todo,
+    "send_telegram":  _tool_send_telegram,
+    # Fallback — goes through Claw's full agent loop (~20 s)
     "ask_claw":      _tool_ask_claw,
 }
 

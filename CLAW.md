@@ -74,6 +74,51 @@ Latency (measured end-to-end with easy-todo):
 
 For realtime "conversation" responses, `ask_claw` is **not** the right tool. It's for "do something in the world" — which users implicitly tolerate taking longer because a real action is happening.
 
+## Fast-path tools (skip Claw's LLM entirely)
+
+For the most common voice asks — todo management, messaging — `ask_claw` is overkill.
+We ship dedicated tools that shell out to Claw's skill CLIs directly:
+
+| tool | backing skill | measured |
+|---|---|---|
+| `add_todo(title, notes?, priority?, due?, tags?)` | `easy-todo/cli.js add ...` | **~35 ms** per call |
+| `list_todos(filter?, days?)`                      | `easy-todo/cli.js list ...`| ~20 ms |
+| `complete_todo(id_or_title)`                      | `easy-todo/cli.js complete` | ~25 ms |
+| `send_telegram(text, chat_id?)`                   | `api.telegram.org/bot<token>/sendMessage` via Claw's configured bot | ~200 ms |
+| `ask_claw(message)` **(fallback only)**           | full Claw agent loop | ~20–26 s |
+
+Warm end-to-end (Qwen3.6 decides → tool runs → Qwen3.6 narrates, median of 3):
+
+| scenario | total | TTFT | speedup vs ask_claw |
+|---|---|---|---|
+| "add 'buy espresso beans' to my todos"   | **2.24 s** | 1.28 s | **12×** |
+| "what's on my todo list for today"       | **2.86 s** | 1.03 s | — |
+| "mark 'buy espresso beans' as done"      | **2.04 s** | 1.13 s | **12×** |
+
+At 2 s end-to-end for a todo add, voice feels instant. The realtime2 server fires a
+"on it" TTS announcement as soon as the tool call arrives (~1.3 s in),
+then progressively streams the synthesized reply through Kokoro CUDA
+(+ ~40 ms TTS), so perceived listened-latency is ~1.5–2 s to first confirmation.
+
+### When to prefer ask_claw
+
+- The request needs a skill with no fast-path yet (cron reminders, apple-notes, 1password, browser automation, gemini web search).
+- The request is multi-step or needs Claw's memory (`"based on our last chat, what should I follow up on?"`).
+- The user is comfortable with "working on it, I'll get back to you" latency.
+
+### Adding more fast-paths
+
+Each skill under `~/.openclaw/workspace/skills/*/cli.js` is a direct candidate.
+Pattern:
+1. Read the skill's `SKILL.md` for command-line surface.
+2. Add a tool schema to `tools.py` `ALL_TOOLS` with a tight description telling
+   Qwen3.6 *when* to prefer it over `ask_claw`.
+3. Add an async executor that shells out to `node .../cli.js <args>` via
+   `asyncio.create_subprocess_exec`.
+4. Register in `_INLINE_DISPATCH`.
+5. Warm-bench — if the LLM is choosing `ask_claw` over the new tool, tighten the
+   description.
+
 ## Use cases that earn the trifecta (voice + vision + Claw)
 
 These are Claw-specific — they use skills Kedar already has wired:

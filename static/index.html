@@ -293,12 +293,28 @@
             <span>🗂️ recall_fact</span>
           </label>
           <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolAddTodo" value="add_todo" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>✅ add_todo <span style="font-size: 0.75rem; color: #76b900;">(Claw fast path)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolListTodos" value="list_todos" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>📋 list_todos <span style="font-size: 0.75rem; color: #76b900;">(Claw fast path)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolCompleteTodo" value="complete_todo" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>☑️ complete_todo <span style="font-size: 0.75rem; color: #76b900;">(Claw fast path)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolSendTelegram" value="send_telegram" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>✈️ send_telegram <span style="font-size: 0.75rem; color: #76b900;">(Claw fast path)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
             <input type="checkbox" id="toolAskClaw" value="ask_claw" style="width: 18px; height: 18px; cursor: pointer;">
-            <span>🦞 ask_claw <span style="font-size: 0.75rem; color: #76b900;">(OpenClaw delegate)</span></span>
+            <span>🦞 ask_claw <span style="font-size: 0.75rem; color: #888;">(Claw fallback — slower)</span></span>
           </label>
         </div>
         <p style="margin-top: 0.75rem; font-size: 0.85rem; color: #666;">
-          <em>Inline tools the assistant can call mid-conversation. Results feed back into the response.</em>
+          <em>Inline tools the assistant can call mid-conversation. Fast-path Claw tools run in ~30 ms; ask_claw goes through a full Claw agent turn (~20 s).</em>
         </p>
       </div>
 
