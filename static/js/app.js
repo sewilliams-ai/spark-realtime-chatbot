@@ -2906,9 +2906,13 @@ async function handleMessage(data) {
         });
       }
       
-      // Reset nextPlayTime for new TTS stream - start immediately
-      nextPlayTime = audioContext.currentTime;
-      log(`TTS playback scheduled to start at: ${nextPlayTime.toFixed(3)}s, context state: ${audioContext.state}`);
+      // Schedule new TTS stream after anything still queued so consecutive
+      // sentences don't play on top of each other. Only snap to "now" if
+      // the previous stream has already finished (nextPlayTime <= currentTime).
+      if (nextPlayTime === null || nextPlayTime < audioContext.currentTime) {
+        nextPlayTime = audioContext.currentTime;
+      }
+      log(`TTS playback scheduled at: ${nextPlayTime.toFixed(3)}s (currentTime: ${audioContext.currentTime.toFixed(3)}s), context state: ${audioContext.state}`);
       break;
 
     case "tts_done":
