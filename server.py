@@ -219,11 +219,22 @@ async def delete_face(name: str):
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    """Serve the frontend HTML."""
+    """Serve the frontend HTML with per-file cache-busters.
+
+    Appends ?v=<mtime> to /static/css/styles.css and /static/js/app.js so
+    any edit to those files invalidates the phone's cached copy on next
+    page load — no more 'hard refresh' gymnastics.
+    """
     index_path = STATIC_DIR / "index.html"
-    if index_path.exists():
-        return index_path.read_text()
-    return HTMLResponse("<h1>Frontend not found. Please create static/index.html</h1>")
+    if not index_path.exists():
+        return HTMLResponse("<h1>Frontend not found. Please create static/index.html</h1>")
+    html = index_path.read_text()
+    for rel in ("css/styles.css", "js/app.js"):
+        asset_path = STATIC_DIR / rel
+        if asset_path.exists():
+            v = int(asset_path.stat().st_mtime)
+            html = html.replace(f"/static/{rel}", f"/static/{rel}?v={v}")
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 # -----------------------------
