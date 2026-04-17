@@ -1923,4 +1923,34 @@
     #agentReasoningConclusion table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
     #agentReasoningConclusion th, #agentReasoningConclusion td { border: 1px solid #dee2e6; padding: 0.5rem; text-align: left; }
     #agentReasoningConclusion thead { background: #f8f9fa; }
+
+    /* ==========================================================================
+       Mobile video-layout hard override — MUST come last in the file.
+
+       The base .video-chat-wrapper.active { display: grid; grid-template-columns:
+       480px 1fr; height: calc(100vh - 180px); } declaration lives further down
+       in this file (around line 1587). Since @media rules and normal rules
+       share the same specificity, later-in-source wins — which meant the
+       desktop grid was overriding the mobile block layout we set earlier and
+       jamming the chat into the right column of the grid. This block has no
+       higher specificity but appears LAST, so it decisively wins on mobile.
+       ========================================================================== */
+    @media (max-width: 768px) {
+      .video-chat-wrapper.active {
+        display: block;
+        grid-template-columns: none;
+        grid-template-rows: none;
+        height: auto;
+        min-height: 0;
+        gap: 0;
+      }
+      .video-chat-wrapper .conversation-container {
+        width: 100%;
+        height: calc(100vh - 140px);
+        max-height: none;
+        min-height: 0;
+        margin-top: 0;
+        padding-bottom: 72px;
+      }
+    }
   
