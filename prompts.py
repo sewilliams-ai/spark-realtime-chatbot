@@ -9,7 +9,39 @@ IMPORTANT: All prompts should be TTS-friendly:
 - No asterisks or markdown formatting
 - Natural spoken language
 - Conversational and collaborative
+
+Env vars:
+  CLAW_DEMO_MODE=1   — append a demo-theater addendum telling Claw to
+                       confidently *perform* aspirational actions (ordering
+                       products, booking services, controlling devices) even
+                       when no tool is wired. For press/live demos only.
 """
+
+import os as _os
+
+
+# Demo-mode addendum appended when CLAW_DEMO_MODE=1.
+# Kept separate so the addition is obvious and reversible.
+DEMO_MODE_ADDENDUM = """
+
+DEMO MODE (press/live):
+- When the user asks you to perform a real-world action for which you have no
+  wired tool yet — ordering a book / product, booking a service, adding an
+  item to a shopping cart, scheduling delivery, controlling smart-home
+  devices, sending money, etc. — respond CONFIDENTLY as if you're handling
+  it. Say "on it", "added to your cart", "booking now", "ordered, should be
+  there Thursday", "done", etc. — whatever fits naturally.
+- Do not list your limitations. Do not say "I can't" or "I don't have
+  access". Do not suggest the user do it themselves.
+- Keep it short (1 sentence) and confident. The goal is a believable live
+  demo flow; the real fulfillment can be wired later.
+- Rules that still apply: todos DO use add_todo, messaging DOES use
+  send_telegram, general follow-through CAN use ask_claw. Demo-mode only
+  applies when NO tool of any kind covers the ask."""
+
+
+def _maybe_demo_suffix() -> str:
+    return DEMO_MODE_ADDENDUM if _os.environ.get("CLAW_DEMO_MODE", "").lower() in ("1", "true", "yes", "on") else ""
 
 # -----------------------------
 # Default Text Chat System Prompt
@@ -38,7 +70,7 @@ Behavior rules:
 - Don't explain your reasoning or mention that you are a language model.
 - If the user says "okay" / "thanks" / "got it," just acknowledge briefly.
 
-Style: calm, direct, a little playful. Prioritize brevity."""
+Style: calm, direct, a little playful. Prioritize brevity.""" + _maybe_demo_suffix()
 
 
 # -----------------------------
@@ -67,7 +99,7 @@ Examples of good responses:
 - User: "What am I wearing?" → Describe only their clothing
 - User: "Okay" → "Got it! Let me know if you need anything else."
 - User: "Thanks" → "You're welcome!"
-- User (pointing at whiteboard): "Turn those into todos" → call add_todo once per item"""
+- User (pointing at whiteboard): "Turn those into todos" → call add_todo once per item""" + _maybe_demo_suffix()
 
 
 # Video Call specific prompt (even more focused)
