@@ -56,12 +56,21 @@ class ReasoningConfig:
 
 @dataclass
 class TTSConfig:
-    """Text-to-Speech configuration."""
+    """Text-to-Speech configuration.
+
+    engine="kokoro" is the default and current production choice on DGX Spark.
+    engine="chatterbox" is supported as an experimental backend for A/B testing
+    voice quality; slower TTFT on GB10 today (see bench/tts.json).
+    """
+    engine: str = os.getenv("TTS_ENGINE", "kokoro")  # "kokoro" | "chatterbox"
     lang_code: str = os.getenv("KOKORO_LANG", "a")
     voice: str = os.getenv("KOKORO_VOICE", "af_bella")
     speed: float = float(os.getenv("KOKORO_SPEED", "1.2"))
     overlap_llm: bool = os.getenv("TTS_OVERLAP", "false").lower() == "true"  # Overlap TTS with LLM streaming
-    device: str = os.getenv("TTS_DEVICE", "cpu")  # "cuda" or "cpu" - default CPU for GB10 compatibility
+    device: str = os.getenv("TTS_DEVICE", "cpu")  # "cuda" or "cpu" — CPU default due to GB10+pypi-torch sm_121 JIT
+    # Chatterbox-specific
+    chatterbox_exaggeration: float = float(os.getenv("CHATTERBOX_EXAGGERATION", "0.5"))
+    chatterbox_cfg_weight: float = float(os.getenv("CHATTERBOX_CFG_WEIGHT", "0.5"))
 
 
 # Directory paths

@@ -34,7 +34,7 @@ from clients import (
     LlamaCppClient,
     VLMClient,
     ReasoningClient,
-    KokoroTTS,
+    create_tts,
 )
 from clients.http_session import set_http_manager
 
@@ -49,7 +49,7 @@ from prompts import DEFAULT_SYSTEM_PROMPT
 # Global models (initialized at startup)
 asr = None  # FasterWhisperASR or LocalWhisperASR based on ASR_MODE
 llm: LlamaCppClient = None
-tts: KokoroTTS = None
+tts = None  # KokoroTTS or ChatterboxTTS, selected via TTSConfig.engine
 
 # Conversation history (in-memory, per-session could be added later)
 conversation_history: List[Dict[str, str]] = [
@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
     if hasattr(asr, 'warmup'):
         asr.warmup()
     llm = LlamaCppClient(LLMConfig())
-    tts = KokoroTTS(TTSConfig())
+    tts = create_tts(TTSConfig())
     yield
     # Cleanup: close shared HTTP session
     if http_manager:

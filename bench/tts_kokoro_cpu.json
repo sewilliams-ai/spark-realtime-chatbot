@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-04-17T08:40:53",
+  "trials": 2,
+  "results": {
+    "kokoro_cpu": {
+      "error": "setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (3,) + inhomogeneous part."
+    }
+  },
+  "torch": "2.11.0+cu128",
+  "cuda": true,
+  "device": "NVIDIA GB10"
+}

@@ -29,6 +29,24 @@ python3 bench/test_tools.py        # e2e smoke for every inline tool
 python3 bench/test_agent_loop.py   # e2e parallel-dispatch / math / memory
 ```
 
+**TTS backend benchmark** (GB10, N=3 per sentence, Kokoro v0.9.4 CPU vs Chatterbox-Turbo CUDA):
+
+| Sentence length | Kokoro CPU TTFT | Chatterbox CUDA TTFT |
+|-----------------|-----------------|---------------------|
+| 15 chars ("Hey, what's up?") | **476 ms** | 793 ms |
+| 31 chars | **783 ms** | 1134 ms |
+| 81 chars | **1224 ms** | 2148 ms |
+| 189 chars | **2098 ms** | 4741 ms |
+
+Kokoro wins every bucket today. Chatterbox-Turbo has better voice quality in blind tests but no native streaming and RTF ~0.5 on GB10 (vs Kokoro's 0.2 on CPU). Kokoro on CUDA is currently blocked by pypi-torch nvrtc JIT on sm_121 — when that ships (torch stable with Blackwell wheels, or a locally-built torchaudio against NGC torch 2.10), Kokoro CUDA should beat both by a wide margin. Bench harness:
+```
+docker build -f bench/Dockerfile.tts -t realtime2-tts .
+docker run --rm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -v $(pwd):/workspace/realtime2 -w /workspace/realtime2 \
+  realtime2-tts python bench/bench_tts.py --trials 3 --out bench/tts.json
+```
+
 ---
 
 ## Quick Start
@@ -86,7 +104,9 @@ All defaults live in `config.py` and can be overridden via environment variables
 | `REASONING_EFFORT` | `high` | For the deep-reasoning agent tool only |
 | `ASR_MODE` | `api` | `api` (separate whisper server) or `local` (in-process) |
 | `ASR_MODEL` | `Systran/faster-whisper-small.en` | Whisper model |
-| `KOKORO_VOICE` | `af_bella` | TTS voice |
+| `KOKORO_VOICE` | `af_bella` | TTS voice (Kokoro only) |
+| `TTS_ENGINE` | `kokoro` | `kokoro` (default) or `chatterbox` (experimental; see bench above) |
+| `TTS_DEVICE` | `cpu` | `cuda` or `cpu`. Kokoro CUDA blocked on Blackwell; Chatterbox CUDA works. |
 | `TTS_OVERLAP` | `false` | Start TTS while LLM still streaming |
 
 ---
