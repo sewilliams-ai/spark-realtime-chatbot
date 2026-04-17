@@ -462,6 +462,10 @@ class VoiceSession:
         text = text.replace("<|channel|>final<|message|>", "")
         text = text.replace("<|end|>", "")
         text = text.replace("<|start|>assistant", "")
+        # Strip hallucinated Gemini-style tool-call fences so they don't get read aloud.
+        import re as _re
+        text = _re.sub(r"<tool_code>[\s\S]*?</tool_code>", "", text)
+        text = _re.sub(r"```(?:tool_code|tool_call|json)?\s*\{[\s\S]*?\}\s*```", "", text)
         text = text.strip()
         
         if not text:
