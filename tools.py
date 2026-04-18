@@ -19,6 +19,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -745,6 +746,39 @@ async def _tool_ask_claw(args: Dict[str, Any]) -> str:
     thinking = args.get("thinking") or "low"
     if not message:
         return json.dumps({"error": "message required"})
+
+    # Primary path: ACP bridge (persistent, streams, ~2 s warm).
+    # Fallback: CLI subprocess (~24 s) — only on ACP startup failure.
+    if os.environ.get("OPENCLAW_DISABLE_ACP", "").lower() not in ("1", "true", "yes"):
+        try:
+            claw_acp = sys.modules.get("clients.claw_acp")
+            if claw_acp is None:
+                # Direct module import — bypass clients/__init__ which pulls in
+                # soundfile/torch/etc. just to expose ASR helpers.
+                import importlib.util
+                _spec = importlib.util.spec_from_file_location(
+                    "clients.claw_acp",
+                    str(Path(__file__).parent / "clients" / "claw_acp.py"),
+                )
+                claw_acp = importlib.util.module_from_spec(_spec)
+                sys.modules["clients.claw_acp"] = claw_acp
+                _spec.loader.exec_module(claw_acp)
+            bridge = await claw_acp.get_singleton()
+            chunks: List[str] = []
+            t0 = time.perf_counter()
+            async for chunk in bridge.prompt(message, timeout_s=120.0):
+                chunks.append(chunk)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            reply = _truncate("".join(chunks).strip() or "(no reply)", 4000)
+            return json.dumps({
+                "reply": reply,
+                "elapsed_ms": round(elapsed_ms, 1),
+                "transport": "acp",
+            })
+        except Exception as e:
+            print(f"[ask_claw] ACP failed ({e}); falling back to CLI")
+            # fall through to CLI
+
     claw = _find_openclaw()
     if not claw:
         return json.dumps({
@@ -804,6 +838,7 @@ async def _tool_ask_claw(args: Dict[str, Any]) -> str:
         "reply": _truncate("\n\n".join(reply_parts) or "(no reply)", 4000),
         "stop_reason": stop,
         "elapsed_ms": round(elapsed_ms, 1),
+        "transport": "cli",
     })
 
 
