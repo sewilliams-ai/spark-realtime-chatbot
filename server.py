@@ -42,6 +42,17 @@ from clients.http_session import set_http_manager
 from prompts import DEFAULT_SYSTEM_PROMPT
 
 
+def _safely_spoken_flag(blob) -> bool:
+    """True if a tool result JSON has {"spoken": true}.
+    Used by the agent loop to know whether ask_claw already streamed its
+    reply directly to TTS so the LLM follow-up should be brief.
+    """
+    try:
+        return bool(json.loads(blob or "{}").get("spoken"))
+    except Exception:
+        return False
+
+
 # In CLAW_DEMO_MODE, strip ask_claw from the tools list — the prompt already
 # tells the model to affirm action-asks confidently, but removing the tool
 # from the array entirely prevents the model from routing around the prompt
@@ -696,10 +707,84 @@ class VoiceSession:
     MAX_TOOL_ITERATIONS = 4
 
     async def _execute_tool_calls_parallel(self, tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Execute tool calls concurrently. Returns OpenAI-format tool_result messages."""
-        async def _run(tc):
+        """Execute tool calls concurrently. Returns OpenAI-format tool_result messages.
+
+        Special-cases ask_claw: instead of awaiting the whole reply, opens an
+        ACP stream and pipes Claw's chunks straight into progressive TTS in
+        real time. The user hears Claw speak directly as the agent generates,
+        not after a full silent wait. The tool result is still appended to
+        history so the LLM follow-up can do its own short narration if needed.
+        """
+        async def _run_streaming_claw(tc):
             tool_id = tc.get("id", "")
             fn = tc.get("function", {}) or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            message = (args.get("message") or "").strip()
+            if not message:
+                return {"tool_call_id": tool_id, "role": "tool", "name": "ask_claw",
+                        "content": json.dumps({"error": "empty message"})}
+            t0 = asyncio.get_event_loop().time()
+            try:
+                # Lazy import — claw_acp lives in clients/ but we bypass __init__
+                claw_acp = sys.modules.get("clients.claw_acp")
+                if claw_acp is None:
+                    import importlib.util as _ilu
+                    _spec = _ilu.spec_from_file_location(
+                        "clients.claw_acp",
+                        str(Path(__file__).parent / "clients" / "claw_acp.py"),
+                    )
+                    claw_acp = _ilu.module_from_spec(_spec)
+                    sys.modules["clients.claw_acp"] = claw_acp
+                    _spec.loader.exec_module(claw_acp)
+                bridge = await claw_acp.get_singleton()
+                full = []
+                buf = ""
+                spoke = False
+                async for chunk in bridge.prompt(message, timeout_s=120.0):
+                    if not self.alive:
+                        await bridge.cancel()
+                        break
+                    full.append(chunk)
+                    buf += chunk
+                    sentences, buf = self._extract_complete_sentences(buf)
+                    for s in sentences:
+                        s = s.strip()
+                        if s:
+                            await self.stream_tts(s)
+                            spoke = True
+                # flush trailing fragment
+                tail = buf.strip()
+                if tail and self.alive:
+                    await self.stream_tts(tail)
+                    spoke = True
+                elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
+                reply_text = "".join(full).strip()
+                print(f"[Voice Session]   ← ask_claw streamed in {elapsed_ms:.0f}ms ({len(reply_text)} chars, spoke={spoke})")
+                # Mark the tool result so the agent loop's LLM follow-up knows
+                # it should NOT re-narrate (we already spoke). The 'spoken' key
+                # is consumed by the upstream loop to skip its own TTS.
+                return {
+                    "tool_call_id": tool_id, "role": "tool", "name": "ask_claw",
+                    "content": json.dumps({
+                        "reply": reply_text or "(no reply)",
+                        "elapsed_ms": round(elapsed_ms, 1),
+                        "transport": "acp-streamed",
+                        "spoken": spoke,
+                    }),
+                }
+            except Exception as e:
+                print(f"[Voice Session] ask_claw streaming failed: {e}; falling back to buffered")
+                content = await execute_tool("ask_claw", args)
+                return {"tool_call_id": tool_id, "role": "tool", "name": "ask_claw", "content": content}
+
+        async def _run(tc):
+            fn = tc.get("function", {}) or {}
+            if fn.get("name") == "ask_claw":
+                return await _run_streaming_claw(tc)
+            tool_id = tc.get("id", "")
             name = fn.get("name", "")
             try:
                 args = json.loads(fn.get("arguments") or "{}")
@@ -711,10 +796,7 @@ class VoiceSession:
             elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
             print(f"[Voice Session]   ← {name} in {elapsed_ms:.0f}ms ({len(content)} chars)")
             return {
-                "tool_call_id": tool_id,
-                "role": "tool",
-                "name": name,
-                "content": content,
+                "tool_call_id": tool_id, "role": "tool", "name": name, "content": content,
             }
         return await asyncio.gather(*[_run(tc) for tc in tool_calls])
 
@@ -844,6 +926,21 @@ class VoiceSession:
                             tool_final_response = ""
                             sentence_buf = ""
                             spoke_anything = False
+                            # If ask_claw already spoke its reply directly via the streaming path,
+                            # the LLM follow-up usually adds 1-2 sentences of paraphrasing. To
+                            # avoid double-speaking, give the model an explicit instruction that
+                            # the user already heard Claw and ONLY a brief 1-sentence ack is needed.
+                            already_spoke_via_claw = any(
+                                _safely_spoken_flag(tr.get("content")) for tr in tool_results
+                            )
+                            if already_spoke_via_claw:
+                                self.conversation_history.append({
+                                    "role": "system",
+                                    "content": ("The previous tool result was already spoken aloud "
+                                                "to the user. Reply with at most ONE short ack "
+                                                "sentence (or just '.' if no ack is needed). "
+                                                "Do NOT repeat or paraphrase what was just said."),
+                                })
                             enabled_tool_defs = _filter_for_demo(get_enabled_tools(self.enabled_tools))
                             for iteration in range(self.MAX_TOOL_ITERATIONS):
                                 if not self.alive:
