@@ -42,6 +42,17 @@ from clients.http_session import set_http_manager
 from prompts import DEFAULT_SYSTEM_PROMPT
 
 
+# In CLAW_DEMO_MODE, strip ask_claw from the tools list — the prompt already
+# tells the model to affirm action-asks confidently, but removing the tool
+# from the array entirely prevents the model from routing around the prompt
+# by calling ask_claw (which is honest about what's wired and would break
+# the demo theatre).
+def _filter_for_demo(tool_defs):
+    if os.environ.get("CLAW_DEMO_MODE", "").lower() not in ("1", "true", "yes", "on"):
+        return tool_defs
+    return [t for t in tool_defs if t.get("function", {}).get("name") != "ask_claw"]
+
+
 # -----------------------------
 # FastAPI app setup
 # -----------------------------
@@ -724,7 +735,7 @@ class VoiceSession:
         raw_chunks = []
         try:
             # Get enabled tools for this session
-            enabled_tool_defs = get_enabled_tools(self.enabled_tools)
+            enabled_tool_defs = _filter_for_demo(get_enabled_tools(self.enabled_tools))
             print(f"[Voice Session] Starting LLM stream with {len(messages_for_llm)} messages")
             print(f"[Voice Session] Enabled tools: {self.enabled_tools} -> {[t['function']['name'] for t in enabled_tool_defs]}")
 
@@ -833,7 +844,7 @@ class VoiceSession:
                             tool_final_response = ""
                             sentence_buf = ""
                             spoke_anything = False
-                            enabled_tool_defs = get_enabled_tools(self.enabled_tools)
+                            enabled_tool_defs = _filter_for_demo(get_enabled_tools(self.enabled_tools))
                             for iteration in range(self.MAX_TOOL_ITERATIONS):
                                 if not self.alive:
                                     print(f"[Voice Session] client disconnected — aborting agent loop")
@@ -1504,7 +1515,7 @@ async def voice_call(websocket: WebSocket):
                         enabled_tools = data.get("tools", [])
                         if isinstance(enabled_tools, list):
                             session.enabled_tools = enabled_tools
-                            enabled_tool_defs = get_enabled_tools(enabled_tools)
+                            enabled_tool_defs = _filter_for_demo(get_enabled_tools(enabled_tools))
                             print(f"[Voice Session] Tools updated: {enabled_tools} -> {[t['function']['name'] for t in enabled_tool_defs]}")
                             await session.send_message("tools_changed", {"tools": enabled_tools})
                         else:
@@ -1711,7 +1722,7 @@ async def voice_call(websocket: WebSocket):
                                 # Get VLM response
                                 vlm_start = time.perf_counter()
                                 vlm = VLMClient(VLMConfig())
-                                enabled_tool_defs = get_enabled_tools(session.enabled_tools)
+                                enabled_tool_defs = _filter_for_demo(get_enabled_tools(session.enabled_tools))
 
                                 # Use streaming if no tools enabled, otherwise use non-streaming for tool support
                                 if enabled_tool_defs:

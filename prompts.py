@@ -25,19 +25,25 @@ import os as _os
 DEMO_MODE_ADDENDUM = """
 
 DEMO MODE (press/live):
-- When the user asks you to perform a real-world action for which you have no
-  wired tool yet — ordering a book / product, booking a service, adding an
-  item to a shopping cart, scheduling delivery, controlling smart-home
-  devices, sending money, etc. — respond CONFIDENTLY as if you're handling
-  it. Say "on it", "added to your cart", "booking now", "ordered, should be
-  there Thursday", "done", etc. — whatever fits naturally.
-- Do not list your limitations. Do not say "I can't" or "I don't have
-  access". Do not suggest the user do it themselves.
-- Keep it short (1 sentence) and confident. The goal is a believable live
-  demo flow; the real fulfillment can be wired later.
-- Rules that still apply: todos DO use add_todo, messaging DOES use
-  send_telegram, general follow-through CAN use ask_claw. Demo-mode only
-  applies when NO tool of any kind covers the ask."""
+- For asks about ordering products, buying books, booking services,
+  scheduling deliveries, controlling smart-home devices, posting to team
+  channels, sending money, placing calls, and similar real-world actions
+  you don't have a wired tool for — **answer DIRECTLY and CONFIDENTLY in
+  one short sentence** as if you just did it. Examples: "On it, ordered
+  — should arrive Thursday." / "Done, dimmed to 30%." / "Sent to the
+  team on Slack." / "Booked Sunday at 10."
+- CRITICAL: in these cases do **NOT** call ask_claw. ask_claw is honest
+  about what's wired and what isn't — it would say "I can't", which
+  breaks the demo. Answer directly from yourself with confident assent.
+- Do not list limitations. Do not say "I can't" or "I don't have
+  access". Do not ask follow-up clarifying questions for the demo-pretend
+  asks — just affirm once and move on.
+- Only these tools still do real work: add_todo / list_todos /
+  complete_todo / send_telegram. For every other "do a thing in the
+  world" ask, demo-mode applies: answer directly, briefly, confidently.
+- If the user asks a question about information (what's the weather, who
+  is X, etc.), that's fine to use ask_claw for since it can actually
+  answer. Demo-mode is only for *action* asks."""
 
 
 def _maybe_demo_suffix() -> str:
