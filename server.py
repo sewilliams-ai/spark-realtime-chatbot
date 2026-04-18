@@ -272,6 +272,10 @@ class VoiceSession:
         self.asr_last_text = ""
         self.is_recording = False
         self.audio_context_initialized = False
+        # Last camera frame seen in video-call mode (base64 JPEG, no data: prefix).
+        # ask_claw uses this to pass the actual pixels to Claw, so Claw's own
+        # VLM can reason on the image instead of just realtime2's description.
+        self.last_camera_frame_b64: Optional[str] = None
         self.selected_voice = os.getenv("KOKORO_VOICE", "af_bella")  # Default voice
         self.enabled_tools = []  # Default: no tools enabled
         
@@ -743,7 +747,11 @@ class VoiceSession:
                 full = []
                 buf = ""
                 spoke = False
-                async for chunk in bridge.prompt(message, timeout_s=120.0):
+                # Pass the latest camera frame to Claw if we have one — Claw's
+                # own VLM then reasons on the actual pixels instead of
+                # realtime2's word-description of the scene.
+                image_b64 = self.last_camera_frame_b64
+                async for chunk in bridge.prompt(message, image_b64=image_b64, timeout_s=120.0):
                     if not self.alive:
                         await bridge.cancel()
                         break
@@ -1701,6 +1709,10 @@ async def voice_call(websocket: WebSocket):
                         image_b64 = data.get("image")
                         audio_format = data.get("format", "wav")
                         custom_prompt = data.get("system_prompt")
+                        # Cache the latest frame so ask_claw can pass it through to
+                        # Claw on the same turn (image pass-through, #46).
+                        if image_b64:
+                            session.last_camera_frame_b64 = image_b64
                         
                         if not audio_b64:
                             print("[Video Call] No audio in payload")
