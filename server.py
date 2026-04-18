@@ -276,6 +276,23 @@ class VoiceSession:
         # ask_claw uses this to pass the actual pixels to Claw, so Claw's own
         # VLM can reason on the image instead of just realtime2's description.
         self.last_camera_frame_b64: Optional[str] = None
+        # Claw barge-in tracking. Set while a streaming ask_claw turn is in flight
+        # so user speech / disconnect can cancel it.
+        self._claw_in_flight: bool = False
+        self._claw_bridge_ref = None  # the ClawAcp singleton, set when streaming starts
+
+    async def cancel_claw_in_flight(self) -> None:
+        """Cancel any in-flight Claw streaming turn (barge-in / user spoke again)."""
+        if not self._claw_in_flight:
+            return
+        bridge = self._claw_bridge_ref
+        if bridge is None:
+            return
+        try:
+            print("[Voice Session] barge-in: cancelling in-flight Claw turn")
+            await bridge.cancel()
+        except Exception as e:
+            print(f"[Voice Session] cancel_claw_in_flight failed: {e}")
         self.selected_voice = os.getenv("KOKORO_VOICE", "af_bella")  # Default voice
         self.enabled_tools = []  # Default: no tools enabled
         
@@ -744,6 +761,9 @@ class VoiceSession:
                     sys.modules["clients.claw_acp"] = claw_acp
                     _spec.loader.exec_module(claw_acp)
                 bridge = await claw_acp.get_singleton()
+                # Mark in-flight so barge-in / disconnect can cancel us
+                self._claw_in_flight = True
+                self._claw_bridge_ref = bridge
                 full = []
                 buf = ""
                 spoke = False
@@ -787,6 +807,9 @@ class VoiceSession:
                 print(f"[Voice Session] ask_claw streaming failed: {e}; falling back to buffered")
                 content = await execute_tool("ask_claw", args)
                 return {"tool_call_id": tool_id, "role": "tool", "name": "ask_claw", "content": content}
+            finally:
+                self._claw_in_flight = False
+                self._claw_bridge_ref = None
 
         async def _run(tc):
             fn = tc.get("function", {}) or {}
@@ -1547,6 +1570,9 @@ async def voice_call(websocket: WebSocket):
             # Binary = audio chunk for ASR
             if msg.get("bytes") is not None:
                 chunk_bytes = msg["bytes"]
+                # Voice-mode barge-in: a Claw turn streaming → user spoke → cancel.
+                if session._claw_in_flight:
+                    await session.cancel_claw_in_flight()
                 session.is_recording = True
                 try:
                     await session.process_asr_chunk(chunk_bytes)
@@ -1705,6 +1731,11 @@ async def voice_call(websocket: WebSocket):
                     elif msg_type == "video_call_data":
                         # Video call: audio + image from VAD/PTT
                         print("[Video Call] Received video_call_data")
+                        # Barge-in: if a Claw turn is mid-stream, cancel it.
+                        # The user is talking again — Claw's reply has been
+                        # superseded.
+                        if session._claw_in_flight:
+                            await session.cancel_claw_in_flight()
                         audio_b64 = data.get("audio")
                         image_b64 = data.get("image")
                         audio_format = data.get("format", "wav")
