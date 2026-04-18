@@ -206,13 +206,15 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
         "function": {
             "name": "claw_recall",
             "description": (
-                "Look up something Claw already knows about Kedar — facts in "
-                "his persona files (MEMORY.md, USER.md, SOUL.md). Use for "
-                "questions like 'what's my github handle', 'who is Sarah', "
-                "'what did we decide about X', 'what are my work priorities', "
-                "anything where Claw's recorded context might already have "
-                "the answer. ~5 ms — much faster than ask_claw and equally "
-                "private."
+                "Search Claw's persona/memory files (MEMORY.md, USER.md, "
+                "SOUL.md) for something you don't already know from your "
+                "system context. ONLY call this when the answer is not "
+                "already in your prompt — most common Kedar facts (github "
+                "handle, projects, preferences, identity) are already baked "
+                "into your system prompt via persona injection and you "
+                "should answer those directly without a tool call. Use this "
+                "tool for later additions, deep grep, or when you're not "
+                "sure. ~5 ms when you do need it."
             ),
             "parameters": {
                 "type": "object",
