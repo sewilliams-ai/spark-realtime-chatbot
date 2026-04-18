@@ -11,13 +11,17 @@ IMPORTANT: All prompts should be TTS-friendly:
 - Conversational and collaborative
 
 Env vars:
-  CLAW_DEMO_MODE=1   — append a demo-theater addendum telling Claw to
-                       confidently *perform* aspirational actions (ordering
-                       products, booking services, controlling devices) even
-                       when no tool is wired. For press/live demos only.
+  CLAW_DEMO_MODE=1            — append a demo-theater addendum telling Claw
+                                to confidently *perform* aspirational actions
+                                (ordering products, booking services, etc.).
+  CLAW_INJECT_PERSONA=0       — disable persona injection (default: enabled
+                                if Claw workspace files are present).
+  OPENCLAW_WORKSPACE=<path>   — Claw workspace dir (default
+                                ~/.openclaw/workspace).
 """
 
 import os as _os
+from pathlib import Path as _Path
 
 
 # Demo-mode addendum appended when CLAW_DEMO_MODE=1.
@@ -49,6 +53,52 @@ DEMO MODE (press/live):
 def _maybe_demo_suffix() -> str:
     return DEMO_MODE_ADDENDUM if _os.environ.get("CLAW_DEMO_MODE", "").lower() in ("1", "true", "yes", "on") else ""
 
+
+# ----- Claw persona injection ---------------------------------------------
+# realtime2's Qwen and the Claw agent share the same model, but talk to two
+# different prompt trees. By injecting Claw's SOUL.md / USER.md / MEMORY.md
+# into realtime2's system prompt at session start, we collapse "Claw the
+# voice front-end" and "Claw the agent" into one identity that knows the
+# same things about Kedar.
+
+_CLAW_WORKSPACE = _Path(_os.environ.get("OPENCLAW_WORKSPACE",
+                                        _os.path.expanduser("~/.openclaw/workspace")))
+_PERSONA_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
+_MAX_PERSONA_BYTES = 16 * 1024  # truncate per-file at 16 KB to keep prompts sane
+
+
+def _load_claw_persona() -> str:
+    """Read Claw's persona files and format them as a system-prompt addendum.
+
+    Returns "" when persona injection is disabled or files are absent —
+    callers append unconditionally and the empty case is a no-op.
+    """
+    if _os.environ.get("CLAW_INJECT_PERSONA", "1").lower() in ("0", "false", "no", "off"):
+        return ""
+    chunks: list[str] = []
+    for name in _PERSONA_FILES:
+        p = _CLAW_WORKSPACE / name
+        if not p.exists():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if len(text) > _MAX_PERSONA_BYTES:
+            text = text[:_MAX_PERSONA_BYTES] + "\n…(truncated)"
+        chunks.append(f"\n----- {name} -----\n{text.strip()}")
+    if not chunks:
+        return ""
+    return (
+        "\n\n# Claw's persistent memory & identity (read-only context)\n"
+        "These are Claw's own workspace files — your shared memory with the "
+        "OpenClaw agent on this machine. Treat them as facts you already "
+        "know about yourself and Kedar. Don't read them out loud verbatim "
+        "unless asked. Use them to answer 'who am I?', 'what are my "
+        "projects?', preferences, etc., directly — without calling any tool.\n"
+        + "".join(chunks)
+    )
+
 # -----------------------------
 # Default Text Chat System Prompt
 # -----------------------------
@@ -76,7 +126,7 @@ Behavior rules:
 - Don't explain your reasoning or mention that you are a language model.
 - If the user says "okay" / "thanks" / "got it," just acknowledge briefly.
 
-Style: calm, direct, a little playful. Prioritize brevity.""" + _maybe_demo_suffix()
+Style: calm, direct, a little playful. Prioritize brevity.""" + _load_claw_persona() + _maybe_demo_suffix()
 
 
 # -----------------------------
@@ -105,7 +155,7 @@ Examples of good responses:
 - User: "What am I wearing?" → Describe only their clothing
 - User: "Okay" → "Got it! Let me know if you need anything else."
 - User: "Thanks" → "You're welcome!"
-- User (pointing at whiteboard): "Turn those into todos" → call add_todo once per item""" + _maybe_demo_suffix()
+- User (pointing at whiteboard): "Turn those into todos" → call add_todo once per item""" + _load_claw_persona() + _maybe_demo_suffix()
 
 
 # Video Call specific prompt (even more focused)
@@ -141,7 +191,7 @@ If the question is about what you SEE (architecture, diagrams, code), answer it 
 IMPORTANT FOR TOOL CALLS:
 When using tools, include a description of what you see in the "context" parameter (if there's relevant visual content). If there's no relevant image, leave context empty - the reasoning tool has its own data files.
 
-Be a helpful friend on a video call, not a surveillance camera.""" + _maybe_demo_suffix()
+Be a helpful friend on a video call, not a surveillance camera.""" + _load_claw_persona() + _maybe_demo_suffix()
 
 
 # -----------------------------
