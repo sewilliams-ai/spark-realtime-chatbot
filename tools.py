@@ -201,6 +201,58 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
             },
         },
     },
+    "claw_recall": {
+        "type": "function",
+        "function": {
+            "name": "claw_recall",
+            "description": (
+                "Look up something Claw already knows about Kedar — facts in "
+                "his persona files (MEMORY.md, USER.md, SOUL.md). Use for "
+                "questions like 'what's my github handle', 'who is Sarah', "
+                "'what did we decide about X', 'what are my work priorities', "
+                "anything where Claw's recorded context might already have "
+                "the answer. ~5 ms — much faster than ask_claw and equally "
+                "private."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Keyword(s) or short phrase. Returns matching lines plus 1 line of context above/below.",
+                    },
+                    "max_lines": {"type": "integer", "description": "Cap on lines returned (default 40).", "default": 40},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    "claw_remember": {
+        "type": "function",
+        "function": {
+            "name": "claw_remember",
+            "description": (
+                "Persist a fact about Kedar / a preference / a decision into "
+                "Claw's MEMORY.md so it sticks across sessions. Use when the "
+                "user says 'remember that…', 'note that…', 'from now on…'. "
+                "Appends a timestamped line."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fact": {
+                        "type": "string",
+                        "description": "The thing to remember, phrased as Claw would write it (one short sentence).",
+                    },
+                    "section": {
+                        "type": "string",
+                        "description": "Optional H2 section header to file under. Defaults to 'Captured by realtime2'.",
+                    },
+                },
+                "required": ["fact"],
+            },
+        },
+    },
     "send_telegram": {
         "type": "function",
         "function": {
@@ -648,6 +700,82 @@ async def _tool_complete_todo(args: Dict[str, Any]) -> str:
     })
 
 
+CLAW_MEMORY_MD = CLAW_WORKSPACE / "MEMORY.md"
+CLAW_USER_MD   = CLAW_WORKSPACE / "USER.md"
+CLAW_SOUL_MD   = CLAW_WORKSPACE / "SOUL.md"
+
+
+async def _tool_claw_recall(args: Dict[str, Any]) -> str:
+    q = (args.get("query") or "").strip().lower()
+    if not q:
+        return json.dumps({"error": "query required"})
+    max_lines = int(args.get("max_lines") or 40)
+    hits: List[Dict[str, Any]] = []
+    for src in (CLAW_MEMORY_MD, CLAW_USER_MD, CLAW_SOUL_MD):
+        if not src.exists():
+            continue
+        try:
+            lines = src.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        for i, line in enumerate(lines):
+            if q in line.lower():
+                lo = max(0, i - 1)
+                hi = min(len(lines), i + 2)
+                snippet = "\n".join(lines[lo:hi]).strip()
+                hits.append({"file": src.name, "line": i + 1, "match": snippet})
+                if len(hits) >= max_lines:
+                    break
+        if len(hits) >= max_lines:
+            break
+    return json.dumps({
+        "query": q,
+        "hits": hits,
+        "n": len(hits),
+    })
+
+
+async def _tool_claw_remember(args: Dict[str, Any]) -> str:
+    fact = (args.get("fact") or "").strip()
+    if not fact:
+        return json.dumps({"error": "fact required"})
+    section = (args.get("section") or "Captured by realtime2").strip()
+    try:
+        CLAW_MEMORY_MD.parent.mkdir(parents=True, exist_ok=True)
+        existing = CLAW_MEMORY_MD.read_text(encoding="utf-8") if CLAW_MEMORY_MD.exists() else ""
+        ts = time.strftime("%Y-%m-%d")
+        header = f"## {section}"
+        new_line = f"- {ts}: {fact}"
+        if header in existing:
+            # append under the section header (just before the next H2 or EOF)
+            updated_lines: List[str] = []
+            inserted = False
+            in_section = False
+            for line in existing.splitlines():
+                if line.startswith(header):
+                    in_section = True
+                    updated_lines.append(line)
+                    continue
+                if in_section and line.startswith("## "):
+                    if not inserted:
+                        updated_lines.append(new_line)
+                        inserted = True
+                    in_section = False
+                updated_lines.append(line)
+            if in_section and not inserted:
+                updated_lines.append(new_line)
+                inserted = True
+            CLAW_MEMORY_MD.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+        else:
+            with CLAW_MEMORY_MD.open("a", encoding="utf-8") as f:
+                if existing and not existing.endswith("\n"):
+                    f.write("\n")
+                f.write(f"\n{header}\n{new_line}\n")
+        return json.dumps({"ok": True, "fact": fact, "section": section, "file": str(CLAW_MEMORY_MD)})
+    except Exception as e:
+        return json.dumps({"error": f"claw_remember failed: {e}"})
+
+
 def _load_telegram_config() -> Dict[str, Any]:
     try:
         d = json.loads(CLAW_CONFIG_JSON.read_text())
@@ -859,6 +987,9 @@ _INLINE_DISPATCH = {
     "list_todos":     _tool_list_todos,
     "complete_todo":  _tool_complete_todo,
     "send_telegram":  _tool_send_telegram,
+    # Direct memory access — no LLM hop, no skill CLI, just file I/O
+    "claw_recall":    _tool_claw_recall,
+    "claw_remember":  _tool_claw_remember,
     # Fallback — goes through Claw's full agent loop (~20 s)
     "ask_claw":      _tool_ask_claw,
 }
