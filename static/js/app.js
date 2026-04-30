@@ -1011,14 +1011,22 @@ async function startVideoCallCamera(facingMode = videoCallFacingMode) {
   const status = document.getElementById('videoCallWebcamStatus');
   const cameraBtn = document.getElementById('videoCallCameraBtn');
 
-  const nextStream = await navigator.mediaDevices.getUserMedia({
+  const getCameraStream = async (useExactFacingMode) => navigator.mediaDevices.getUserMedia({
     video: {
-      facingMode: { ideal: facingMode },
+      facingMode: useExactFacingMode ? { exact: facingMode } : { ideal: facingMode },
       width: { ideal: 640 },
       height: { ideal: 480 }
     },
     audio: false
   });
+
+  let nextStream;
+  try {
+    nextStream = await getCameraStream(true);
+  } catch (err) {
+    log(`Exact ${facingMode} camera unavailable, trying ideal constraint: ${err.message}`);
+    nextStream = await getCameraStream(false);
+  }
 
   if (videoCallStream) {
     videoCallStream.getTracks().forEach(t => t.stop());
@@ -1031,6 +1039,7 @@ async function startVideoCallCamera(facingMode = videoCallFacingMode) {
   if (video) {
     video.srcObject = videoCallStream;
     video.classList.toggle('mirrored', facingMode === 'user');
+    video.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
     await video.play();
   }
   if (cameraBtn) {

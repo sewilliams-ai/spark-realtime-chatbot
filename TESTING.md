@@ -7,6 +7,32 @@
 No output. Command exited successfully.
 ```
 
+**Feature: Force rear camera preview unmirrored and bust static cache**
+**Test #1: JavaScript syntax validation**
+**Status:** PASS
+**Code Command**: `node --check static/js/app.js`
+**Result**:
+```bash
+No output. Command exited successfully.
+```
+
+**Feature: Force rear camera preview unmirrored and bust static cache**
+**Test #2: Served asset verification**
+**Status:** PASS
+**Code Command**: `curl -ks https://localhost:8443/ | rg -n "styles\\.css|app\\.js" && curl -ks 'https://localhost:8443/static/js/app.js?v=rear-camera-unmirror' | rg -n "exact: facingMode|video\\.style\\.transform|classList.toggle\\('mirrored'" && curl -ks 'https://localhost:8443/static/css/styles.css?v=rear-camera-unmirror' | rg -n "video\\.mirrored|transform: none|scaleX"`
+**Result**:
+```bash
+14:  <link rel="stylesheet" href="/static/css/styles.css?v=rear-camera-unmirror">
+486:  <script src="/static/js/app.js?v=rear-camera-unmirror"></script>
+1016:      facingMode: useExactFacingMode ? { exact: facingMode } : { ideal: facingMode },
+1041:    video.classList.toggle('mirrored', facingMode === 'user');
+1042:    video.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
+1313:      transform: none;
+1525:      transform: none;
+1528:    .video-call-webcam video.mirrored {
+1529:      transform: scaleX(-1);
+```
+
 **Feature: Rear camera preview is not mirrored**
 **Test #1: JavaScript syntax validation**
 **Status:** PASS
