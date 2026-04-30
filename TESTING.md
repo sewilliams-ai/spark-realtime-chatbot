@@ -7,6 +7,15 @@
 No output. Command exited successfully.
 ```
 
+**Feature: Clean menu recommendation wording**
+**Test #1: Prompt syntax validation**
+**Status:** PASS
+**Code Command**: `python -m py_compile prompts.py`
+**Result**:
+```bash
+No output. Command exited successfully.
+```
+
 **Feature: Translate menu items before recommending**
 **Test #1: Prompt syntax validation**
 **Status:** PASS
