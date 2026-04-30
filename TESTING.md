@@ -1,3 +1,92 @@
+**Feature: Claw/main demo merge regression**
+**Test #1: Post-merge syntax and whitespace validation**
+**Status:** PASS
+**Code Command**: `python3 -m py_compile server.py prompts.py tools.py clients/*.py && node --check static/js/app.js && git diff --check HEAD`
+**Result**:
+```bash
+No output. Commands exited successfully.
+```
+
+**Feature: Claw/main demo merge regression**
+**Test #2: Tool schema sentinel validation**
+**Status:** PASS
+**Code Command**:
+```bash
+python3 - <<'PY'
+import json
+import asyncio
+from tools import ALL_TOOLS, execute_tool, is_agent_tool
+
+assert 'workspace_update_assistant' in ALL_TOOLS
+assert 'output_path' in ALL_TOOLS['markdown_assistant']['function']['parameters']['properties']
+assert is_agent_tool('workspace_update_assistant')
+
+async def main():
+    md = json.loads(await execute_tool('markdown_assistant', {
+        'task': 'Convert this hand-drawn architecture into a Markdown README',
+        'context': 'React frontend -> FastAPI backend -> MySQL',
+        'output_path': 'README.md',
+    }))
+    ws = json.loads(await execute_tool('workspace_update_assistant', {
+        'task': 'Add these to the project',
+        'items': ['add streaming updates', 'Redis pub/sub', 'write events table', 'React hook', 'test reconnect', 'buy umbrella'],
+    }))
+    assert md['agent_type'] == 'markdown_assistant'
+    assert md['output_path'] == 'README.md'
+    assert ws['agent_type'] == 'workspace_update_assistant'
+    assert len(ws['items']) == 6
+    print('markdown:', md)
+    print('workspace:', ws)
+
+asyncio.run(main())
+PY
+```
+**Result**:
+```bash
+markdown: {'agent_type': 'markdown_assistant', 'task': 'Convert this hand-drawn architecture into a Markdown README', 'context': 'React frontend -> FastAPI backend -> MySQL', 'output_path': 'README.md', 'status': 'initiated'}
+workspace: {'agent_type': 'workspace_update_assistant', 'task': 'Add these to the project', 'context': '', 'items': ['add streaming updates', 'Redis pub/sub', 'write events table', 'React hook', 'test reconnect', 'buy umbrella'], 'status': 'initiated'}
+```
+
+**Feature: Beat 4 phone handwritten-note fast path**
+**Test #1: Deterministic trigger and workspace routing**
+**Status:** PASS
+**Code Command**:
+```bash
+python3 - <<'PY'
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import server
+
+with TemporaryDirectory() as tmp:
+    server.WORKSPACE_ROOT = Path(tmp).resolve()
+    session = server.VoiceSession.__new__(server.VoiceSession)
+    assert session.is_workspace_update_request('Add these to the project')
+    assert session.is_workspace_update_request('Can you add these handwritten todos to the project?')
+    assert not session.is_workspace_update_request('What should I order from this menu?')
+    todos = session.extract_workspace_todos('Add these to the project', 'Phone handwritten-note request: Add these to the project', [])
+    result = session.apply_workspace_todo_updates(todos)
+    root = Path(tmp)
+    tasks = (root / result['files']['project_tasks']).read_text()
+    design = (root / result['files']['realtime_design']).read_text()
+    personal = (root / result['files']['personal_todos']).read_text()
+    assert 'Add streaming updates' in tasks
+    assert 'Add Redis pub/sub' in tasks
+    assert 'Test reconnect' in tasks
+    assert 'Buy umbrella' not in tasks
+    assert 'Redis pub/sub fans events out across FastAPI instances' in design
+    assert 'Buy umbrella' in personal
+    print('trigger: PASS')
+    print('todos:', todos)
+    print('files:', result['files'])
+PY
+```
+**Result**:
+```bash
+trigger: PASS
+todos: ['Add streaming updates', 'Add Redis pub/sub', 'Write events table', 'Build React hook', 'Test reconnect', 'Buy umbrella']
+files: {'project_tasks': 'workspace/project_dashboard/tasks.md', 'realtime_design': 'workspace/realtime_design.md', 'personal_todos': 'workspace/personal_todos.md'}
+```
+
 **Feature: Route handwritten todos into workspace project files**
 **Test #1: Python and JavaScript syntax validation**
 **Status:** PASS

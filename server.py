@@ -1372,6 +1372,8 @@ CRITICAL INSTRUCTIONS:
                     continue
                 if item.lower() in {"add these to the project", "add these", "project", "personal"}:
                     continue
+                if "add these" in item.lower() and "project" in item.lower():
+                    continue
                 if len(item.split()) > 8:
                     continue
                 raw_items.append(item)
@@ -1433,6 +1435,23 @@ CRITICAL INSTRUCTIONS:
             else:
                 project_tasks.append(todo)
         return project_tasks, personal_tasks
+
+    def is_workspace_update_request(self, text: str) -> bool:
+        """Detect the Beat 4 handwritten-note command before the VLM tool roundtrip."""
+        lower = " ".join((text or "").lower().split())
+        direct_phrases = (
+            "add these to the project",
+            "add these to project",
+            "add this to the project",
+            "add this to project",
+        )
+        if any(phrase in lower for phrase in direct_phrases):
+            return True
+        return (
+            "project" in lower
+            and any(term in lower for term in ("handwritten", "note", "notes", "todo", "todos"))
+            and any(term in lower for term in ("add", "route", "put"))
+        )
 
     def upsert_markdown_section(self, path: Path, title: str, body: str, marker: str) -> None:
         """Create or replace a marked section in a markdown file."""
@@ -2099,6 +2118,17 @@ async def voice_call(websocket: WebSocket):
                             # Build VLM request with image if available
                             if image_b64:
                                 print(f"[Video Call] Image: {len(image_b64)} chars base64")
+
+                                if session.is_workspace_update_request(transcription):
+                                    ack = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
+                                    await session.send_message("tool_invocation", {"message": ack})
+                                    await session.stream_tts(ack, is_transient=True)
+                                    await session.execute_workspace_update_agent(
+                                        "Add these to the project",
+                                        f"Phone handwritten-note request: {transcription}",
+                                        [],
+                                    )
+                                    continue
 
                                 # Face recognition - recognize people in frame
                                 face_context = ""
