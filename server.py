@@ -1600,7 +1600,8 @@ async def voice_call(websocket: WebSocket):
                                 from prompts import VIDEO_CALL_PROMPT, DEFAULT_SYSTEM_PROMPT
 
                                 # Combine personal context with video call prompt
-                                system_prompt = custom_prompt or f"{DEFAULT_SYSTEM_PROMPT}\n\n{VIDEO_CALL_PROMPT}"
+                                base_prompt = custom_prompt or DEFAULT_SYSTEM_PROMPT
+                                system_prompt = f"{base_prompt}\n\n{VIDEO_CALL_PROMPT}"
 
                                 # Add face context to system prompt if we recognized anyone
                                 if face_context:
