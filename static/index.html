@@ -11,7 +11,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.7/dist/bundle.min.js"></script>
-  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="/static/css/styles.css?v=rear-camera-unmirror">
 </head>
 <body>
 
@@ -148,6 +148,9 @@
         </button>
         <button class="video-call-btn camera" id="videoCallCameraBtn" onclick="toggleVideoCallCamera()" title="Camera">
           📷
+        </button>
+        <button class="video-call-btn" id="videoCallFlipCameraBtn" onclick="flipVideoCallCamera()" title="Flip camera" style="background: #6c5ce7;">
+          🔄
         </button>
         <button class="video-call-btn" id="videoCallSettingsBtn" onclick="toggleVideoCallSettings()" title="Settings" style="background: #0984e3;">
           ⚙️
@@ -327,8 +330,12 @@
             <span>🧠 Reasoning Assistant <span style="font-size: 0.75rem; color: #76b900;">(Qwen3.6)</span></span>
           </label>
           <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
-            <input type="checkbox" id="agentMarkdownAssistant" value="markdown_assistant" style="width: 18px; height: 18px; cursor: pointer;">
+            <input type="checkbox" id="agentMarkdownAssistant" value="markdown_assistant" checked style="width: 18px; height: 18px; cursor: pointer;">
             <span>📝 Markdown Assistant</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="agentWorkspaceUpdateAssistant" value="workspace_update_assistant" checked style="width: 18px; height: 18px; cursor: pointer;">
+            <span>🗂️ Workspace Update Assistant</span>
           </label>
           <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
             <input type="checkbox" id="agentHtmlAssistant" value="html_assistant" style="width: 18px; height: 18px; cursor: pointer;">
@@ -538,6 +545,6 @@
   <div id="log"></div>
 
 
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=beat4-workspace-routing"></script>
 </body>
 </html>

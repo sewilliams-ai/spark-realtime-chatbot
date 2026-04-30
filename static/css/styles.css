@@ -1653,7 +1653,11 @@
       height: 100%;
       object-fit: cover;
       display: block;
-      transform: scaleX(-1); /* Mirror */
+      transform: none;
+    }
+
+    .video-call-webcam video.mirrored {
+      transform: scaleX(-1);
     }
 
     .video-call-webcam-status {
@@ -1953,4 +1957,3 @@
         padding-bottom: 72px;
       }
     }
-  

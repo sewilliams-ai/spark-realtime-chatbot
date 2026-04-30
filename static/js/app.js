@@ -708,6 +708,7 @@ let videoCallVadInstance = null;
 let videoCallMuted = false;
 let videoCallCameraOn = true;
 let videoCallStream = null;
+let videoCallFacingMode = 'user';
 let videoCallWaveformBars = [];
 let videoCallSpeaking = false;
 let videoCallProcessing = false; // Flag to block VAD while processing a request
@@ -762,14 +763,7 @@ async function setupVideoCallMode() {
   
   // Start webcam
   try {
-    const video = document.getElementById('videoCallWebcam');
-    videoCallStream = await navigator.mediaDevices.getUserMedia({ 
-      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-      audio: false // Audio handled by VAD
-    });
-    video.srcObject = videoCallStream;
-    await video.play();
-    log('Video call webcam started');
+    await startVideoCallCamera(videoCallFacingMode);
   } catch (err) {
     log(`Webcam error: ${err.message}`);
     document.getElementById('videoCallWebcamStatus').textContent = '❌ Camera Error';
@@ -1058,6 +1052,53 @@ function toggleVideoCallMute() {
   }
 }
 
+async function startVideoCallCamera(facingMode = videoCallFacingMode) {
+  const video = document.getElementById('videoCallWebcam');
+  const status = document.getElementById('videoCallWebcamStatus');
+  const cameraBtn = document.getElementById('videoCallCameraBtn');
+
+  const getCameraStream = async (useExactFacingMode) => navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: useExactFacingMode ? { exact: facingMode } : { ideal: facingMode },
+      width: { ideal: 640 },
+      height: { ideal: 480 }
+    },
+    audio: false
+  });
+
+  let nextStream;
+  try {
+    nextStream = await getCameraStream(true);
+  } catch (err) {
+    log(`Exact ${facingMode} camera unavailable, trying ideal constraint: ${err.message}`);
+    nextStream = await getCameraStream(false);
+  }
+
+  if (videoCallStream) {
+    videoCallStream.getTracks().forEach(t => t.stop());
+  }
+
+  videoCallStream = nextStream;
+  videoCallFacingMode = facingMode;
+  videoCallCameraOn = true;
+
+  if (video) {
+    video.srcObject = videoCallStream;
+    video.classList.toggle('mirrored', facingMode === 'user');
+    video.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
+    await video.play();
+  }
+  if (cameraBtn) {
+    cameraBtn.classList.remove('off');
+    cameraBtn.textContent = '📷';
+  }
+  if (status) {
+    status.textContent = facingMode === 'environment' ? '📹 Back Camera' : '📹 Front Camera';
+  }
+
+  log(`Video call webcam started (${facingMode})`);
+}
+
 function toggleVideoCallCamera() {
   videoCallCameraOn = !videoCallCameraOn;
   const btn = document.getElementById('videoCallCameraBtn');
@@ -1077,6 +1118,29 @@ function toggleVideoCallCamera() {
     status.textContent = '📷 Camera Off';
     if (videoCallStream) {
       videoCallStream.getVideoTracks().forEach(t => t.enabled = false);
+    }
+  }
+}
+
+async function flipVideoCallCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    log('Camera flip unavailable: getUserMedia not supported');
+    return;
+  }
+
+  const nextFacingMode = videoCallFacingMode === 'user' ? 'environment' : 'user';
+  const status = document.getElementById('videoCallWebcamStatus');
+
+  try {
+    if (status) status.textContent = '🔄 Switching camera...';
+    await startVideoCallCamera(nextFacingMode);
+    log(`Switched video camera to ${nextFacingMode}`);
+  } catch (err) {
+    log(`Camera flip failed: ${err.message}`);
+    if (status) {
+      status.textContent = videoCallCameraOn
+        ? (videoCallFacingMode === 'environment' ? '📹 Back Camera' : '📹 Front Camera')
+        : '📷 Camera Off';
     }
   }
 }
@@ -1910,7 +1974,7 @@ function createMessageElement(role, content = "", isTransient = false) {
   return { container: messageDiv, content: contentDiv };
 }
 
-function createMarkdownMessageElement(task, markdown) {
+function createMarkdownMessageElement(task, markdown, filePath = "") {
   const messageDiv = document.createElement("div");
   messageDiv.className = "message message-assistant";
   
@@ -1932,6 +1996,16 @@ function createMarkdownMessageElement(task, markdown) {
   taskDiv.style.color = "#2c3e50";
   taskDiv.textContent = `📄 ${task}`;
   contentDiv.appendChild(taskDiv);
+
+  if (filePath) {
+    const fileDiv = document.createElement("div");
+    fileDiv.style.marginBottom = "0.75rem";
+    fileDiv.style.fontSize = "0.85rem";
+    fileDiv.style.color = "#4b5563";
+    fileDiv.style.fontFamily = "var(--font-mono)";
+    fileDiv.textContent = `Saved to ${filePath}`;
+    contentDiv.appendChild(fileDiv);
+  }
   
   // Rendered markdown preview (truncated)
   const previewDiv = document.createElement("div");
@@ -2656,6 +2730,8 @@ async function handleMessage(data) {
       } else if (data.agent_type === "reasoning_assistant") {
         // Reasoning now uses inline display, not popup
         log("Reasoning uses inline display");
+      } else if (data.agent_type === "workspace_update_assistant") {
+        log("Workspace update assistant uses inline display");
       }
       break;
 
@@ -2748,11 +2824,28 @@ async function handleMessage(data) {
     case "agent_markdown_complete":
       // Markdown assistant finished - add to conversation
       removeEmptyState();
-      const mdMsg = createMarkdownMessageElement(data.task, data.markdown);
+      const mdMsg = createMarkdownMessageElement(data.task, data.markdown, data.file_path || "");
       getActiveConversationEl().appendChild(mdMsg.container);
       scrollToBottom();
       saveCurrentChat();
       log(`Markdown assistant completed: ${data.task.substring(0, 50)}...`);
+      break;
+
+    case "workspace_update_complete":
+      // Workspace update assistant finished - add file summary
+      hideThinkingIndicator();
+      removeEmptyState();
+      const workspaceFiles = data.files || {};
+      const workspaceSummary = data.summary || "Workspace files updated.";
+      const fileList = Object.values(workspaceFiles).filter(Boolean).join("\n");
+      const workspaceMsg = createMessageElement(
+        "assistant",
+        fileList ? `${workspaceSummary}\n\n${fileList}` : workspaceSummary
+      );
+      getActiveConversationEl().appendChild(workspaceMsg.container);
+      scrollToBottom();
+      saveCurrentChat();
+      log(`Workspace update completed: ${fileList}`);
       break;
 
     case "reasoning_started":

@@ -899,7 +899,7 @@ class VoiceSession:
                             is_agent_tool = False
                             for tc in tool_calls:
                                 func = tc.get("function", {})
-                                if func.get("name") in ["markdown_assistant", "reasoning_assistant"]:
+                                if func.get("name") in ["markdown_assistant", "reasoning_assistant", "workspace_update_assistant"]:
                                     is_agent_tool = True
                                     break
                             
@@ -908,6 +908,9 @@ class VoiceSession:
                                 for tc in tool_calls:
                                     if tc.get("function", {}).get("name") == "reasoning_assistant":
                                         feedback_msg = "Let me think through this..."
+                                        break
+                                    if tc.get("function", {}).get("name") == "workspace_update_assistant":
+                                        feedback_msg = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
                                         break
                                 else:
                                     feedback_msg = "On it."
@@ -1037,6 +1040,9 @@ class VoiceSession:
                             is_agent_tool = False
                             agent_type = None
                             agent_task = None
+                            agent_context = ""
+                            agent_output_path = ""
+                            agent_items = []
                             for tool_result in tool_results:
                                 try:
                                     result_data = json.loads(tool_result.get("content", "{}"))
@@ -1044,6 +1050,9 @@ class VoiceSession:
                                         is_agent_tool = True
                                         agent_type = result_data.get("agent_type")
                                         agent_task = result_data.get("task", "")
+                                        agent_context = result_data.get("context", "")
+                                        agent_output_path = result_data.get("output_path", "")
+                                        agent_items = result_data.get("items", [])
                                         break
                                 except json.JSONDecodeError:
                                     pass
@@ -1068,7 +1077,7 @@ CRITICAL INSTRUCTIONS:
                                     },
                                     {
                                         "role": "user",
-                                        "content": f"Write the following document: {agent_task}"
+                                        "content": f"Task: {agent_task}\n\nContext: {agent_context}" if agent_context else f"Task: {agent_task}"
                                     }
                                 ]
                                 
@@ -1081,27 +1090,37 @@ CRITICAL INSTRUCTIONS:
                                 markdown_response = ""
                                 reasoning_accumulated = ""
                                 chunk_count = 0
+                                stream_path, file_path = self.begin_markdown_workspace_stream(
+                                    agent_task,
+                                    agent_output_path
+                                )
+                                print(f"[Voice Session] Streaming markdown to {file_path}")
                                 
                                 # Stream tokens directly to markdown editor as they arrive
                                 await self.send_message("agent_markdown_chunk", {"content": "", "done": False})
                                 
-                                async for chunk in markdown_gen_llm.stream_complete(markdown_generation_messages, tools=None):
-                                    chunk_count += 1
-                                    if chunk.startswith("data: "):
-                                        try:
-                                            data = json.loads(chunk[6:])
-                                            if "content" in data and data["content"]:
-                                                content = data["content"]
-                                                markdown_response += content
-                                                # Stream to markdown editor immediately
-                                                await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
-                                            elif "reasoning_content" in data and data["reasoning_content"]:
-                                                reasoning_accumulated += data["reasoning_content"]
-                                        except json.JSONDecodeError:
-                                            pass
-                                    elif chunk.strip() and not chunk.startswith("data: "):
-                                        markdown_response += chunk
-                                        await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
+                                with stream_path.open("a", encoding="utf-8") as stream_file:
+                                    async for chunk in markdown_gen_llm.stream_complete(markdown_generation_messages, tools=None):
+                                        chunk_count += 1
+                                        if chunk.startswith("data: "):
+                                            try:
+                                                data = json.loads(chunk[6:])
+                                                if "content" in data and data["content"]:
+                                                    content = data["content"]
+                                                    markdown_response += content
+                                                    stream_file.write(content)
+                                                    stream_file.flush()
+                                                    # Stream to markdown editor immediately
+                                                    await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
+                                                elif "reasoning_content" in data and data["reasoning_content"]:
+                                                    reasoning_accumulated += data["reasoning_content"]
+                                            except json.JSONDecodeError:
+                                                pass
+                                        elif chunk.strip() and not chunk.startswith("data: "):
+                                            markdown_response += chunk
+                                            stream_file.write(chunk)
+                                            stream_file.flush()
+                                            await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
                                 
                                 print(f"[Voice Session] Markdown generation complete: {len(markdown_response)} chars")
                                 
@@ -1120,18 +1139,26 @@ CRITICAL INSTRUCTIONS:
                                     
                                     if markdown_response:
                                         print(f"[Voice Session] Markdown generated: {len(markdown_response)} characters")
+
+                                        file_path = self.write_markdown_to_workspace(
+                                            agent_task,
+                                            markdown_response,
+                                            agent_output_path
+                                        )
+                                        print(f"[Voice Session] Markdown written to {file_path}")
                                         
                                         # Signal completion
                                         await self.send_message("agent_markdown_chunk", {"content": "", "done": True})
                                         
                                         # Add to conversation history
-                                        markdown_summary = f"Generated documentation for: {agent_task}\n\n{markdown_response[:500]}{'...' if len(markdown_response) > 500 else ''}"
+                                        markdown_summary = f"Generated documentation at {file_path} for: {agent_task}\n\n{markdown_response[:500]}{'...' if len(markdown_response) > 500 else ''}"
                                         self.conversation_history.append({"role": "assistant", "content": markdown_summary})
                                         
                                         # Send a message to frontend to add markdown to conversation UI
                                         await self.send_message("agent_markdown_complete", {
                                             "task": agent_task,
-                                            "markdown": markdown_response
+                                            "markdown": markdown_response,
+                                            "file_path": file_path
                                         })
                                         return
                                     else:
@@ -1163,6 +1190,14 @@ CRITICAL INSTRUCTIONS:
                                     return
                                 else:
                                     print(f"[Voice Session] No problem found for reasoning agent")
+
+                            elif is_agent_tool and agent_type == "workspace_update_assistant":
+                                await self.execute_workspace_update_agent(
+                                    agent_task or "Add handwritten todos to the project",
+                                    agent_context,
+                                    agent_items if isinstance(agent_items, list) else []
+                                )
+                                return
                             
                             # Process and send the final response from tool execution (for non-agent tools or fallback)
                             if tool_final_response and tool_final_response.strip():
@@ -1260,7 +1295,247 @@ CRITICAL INSTRUCTIONS:
         else:
             print(f"[Voice Session] No final_response to send!")
 
-    async def execute_markdown_agent(self, task: str, context: str = ""):
+    def infer_markdown_output_path(self, task: str) -> str:
+        """Infer a workspace-relative markdown path from the user's task."""
+        import re
+
+        task_lower = (task or "").lower()
+        if "readme" in task_lower:
+            return "README.md"
+        if any(term in task_lower for term in ["realtime", "real-time", "redis", "pub/sub", "fanout"]):
+            return "realtime_design.md"
+        if "personal" in task_lower and any(term in task_lower for term in ["todo", "to-do"]):
+            return "personal_todos.md"
+        if any(term in task_lower for term in ["task", "todo", "to-do"]) and any(term in task_lower for term in ["project", "dashboard"]):
+            return "project_dashboard/tasks.md"
+
+        slug = re.sub(r"[^a-z0-9]+", "-", task_lower).strip("-")[:48]
+        return f"{slug or 'document'}.md"
+
+    def resolve_workspace_markdown_path(self, output_path: str, task: str) -> Path:
+        """Resolve a model-provided path into the shared workspace directory."""
+        workspace_dir = WORKSPACE_ROOT / "workspace"
+        requested = (output_path or "").strip() or self.infer_markdown_output_path(task)
+        relative_path = Path(requested)
+
+        if relative_path.is_absolute():
+            relative_path = Path(relative_path.name)
+
+        parts = [part for part in relative_path.parts if part not in ("", ".", "..")]
+        if parts and parts[0].lower() == "workspace":
+            parts = parts[1:]
+        if not parts:
+            parts = ["document.md"]
+
+        safe_relative = Path(*parts)
+        if safe_relative.suffix.lower() != ".md":
+            safe_relative = safe_relative.with_suffix(".md")
+
+        workspace_resolved = workspace_dir.resolve()
+        output_resolved = (workspace_dir / safe_relative).resolve()
+        if output_resolved != workspace_resolved and workspace_resolved not in output_resolved.parents:
+            output_resolved = workspace_resolved / "document.md"
+
+        return output_resolved
+
+    def write_markdown_to_workspace(self, task: str, markdown: str, output_path: str = "") -> str:
+        """Write markdown into workspace/ and return a path relative to WORKSPACE_ROOT."""
+        path = self.resolve_workspace_markdown_path(output_path, task)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(markdown.rstrip() + "\n", encoding="utf-8")
+        return str(path.relative_to(WORKSPACE_ROOT))
+
+    def begin_markdown_workspace_stream(self, task: str, output_path: str = "") -> tuple[Path, str]:
+        """Create/truncate a workspace markdown file before streaming content into it."""
+        path = self.resolve_workspace_markdown_path(output_path, task)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+        return path, str(path.relative_to(WORKSPACE_ROOT))
+
+    def extract_workspace_todos(self, task: str, context: str = "", items: list = None) -> List[str]:
+        """Extract todo items from tool arguments, visible-note context, or Beat 4 fallback."""
+        import re
+
+        raw_items = [str(item).strip() for item in (items or []) if str(item).strip()]
+        source = "\n".join([task or "", context or ""])
+
+        if not raw_items:
+            cleaned_source = re.sub(
+                r"(?i)(visible handwritten note|handwritten note|todo list|todos?|items?|the note says|the note lists|context|task)\s*[:\-]?",
+                "\n",
+                source,
+            )
+            for part in re.split(r"[\n;,]+", cleaned_source):
+                item = re.sub(r"^\s*(?:[-*•]|\d+[.)]|\[\s?\])\s*", "", part).strip()
+                item = item.strip(" .")
+                if not item:
+                    continue
+                if item.lower() in {"add these to the project", "add these", "project", "personal"}:
+                    continue
+                if len(item.split()) > 8:
+                    continue
+                raw_items.append(item)
+
+        known_items = [
+            "add streaming updates",
+            "Redis pub/sub",
+            "write events table",
+            "React hook",
+            "test reconnect",
+            "buy umbrella",
+        ]
+        source_lower = source.lower()
+        for known in known_items:
+            if known.lower() in source_lower and known not in raw_items:
+                raw_items.append(known)
+
+        if not raw_items and "add these" in source_lower and "project" in source_lower:
+            raw_items = known_items
+
+        normalized = []
+        seen = set()
+        for item in raw_items:
+            item = self.normalize_workspace_todo(item)
+            key = item.lower()
+            if item and key not in seen:
+                normalized.append(item)
+                seen.add(key)
+        return normalized
+
+    def normalize_workspace_todo(self, item: str) -> str:
+        """Normalize common Beat 4 todo wording into clean task labels."""
+        item_clean = " ".join((item or "").strip().split())
+        lower = item_clean.lower()
+        mappings = {
+            "add streaming updates": "Add streaming updates",
+            "streaming updates": "Add streaming updates",
+            "redis pub/sub": "Add Redis pub/sub",
+            "redis pub sub": "Add Redis pub/sub",
+            "write events table": "Write events table",
+            "events table": "Write events table",
+            "react hook": "Build React hook",
+            "test reconnect": "Test reconnect",
+            "buy umbrella": "Buy umbrella",
+        }
+        if lower in mappings:
+            return mappings[lower]
+        return item_clean[:1].upper() + item_clean[1:]
+
+    def split_workspace_todos(self, todos: List[str]) -> tuple[List[str], List[str]]:
+        """Split project tasks from personal todos."""
+        personal_keywords = {"umbrella", "buy ", "groceries", "personal", "errand"}
+        project_tasks = []
+        personal_tasks = []
+        for todo in todos:
+            lower = todo.lower()
+            if any(keyword in lower for keyword in personal_keywords):
+                personal_tasks.append(todo)
+            else:
+                project_tasks.append(todo)
+        return project_tasks, personal_tasks
+
+    def upsert_markdown_section(self, path: Path, title: str, body: str, marker: str) -> None:
+        """Create or replace a marked section in a markdown file."""
+        start = f"<!-- {marker}:start -->"
+        end = f"<!-- {marker}:end -->"
+        section = f"{start}\n## {title}\n\n{body.rstrip()}\n{end}\n"
+
+        if path.exists():
+            content = path.read_text(encoding="utf-8")
+        else:
+            heading = path.stem.replace("_", " ").replace("-", " ").title()
+            content = f"# {heading}\n"
+
+        if start in content and end in content:
+            before, rest = content.split(start, 1)
+            _, after = rest.split(end, 1)
+            updated = before.rstrip() + "\n\n" + section + after.lstrip("\n")
+        else:
+            updated = content.rstrip() + "\n\n" + section
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+
+    def apply_workspace_todo_updates(self, todos: List[str]) -> Dict[str, Any]:
+        """Route Beat 4 todos into project and personal workspace files."""
+        project_tasks, personal_tasks = self.split_workspace_todos(todos)
+        files = {}
+
+        task_path = self.resolve_workspace_markdown_path("project_dashboard/tasks.md", "project tasks")
+        task_lines = "\n".join(f"- [ ] {task}" for task in project_tasks) or "- [ ] Review project notes"
+        self.upsert_markdown_section(
+            task_path,
+            "Engineering Tasks From Handwritten Notes",
+            "These tasks came from the handwritten note captured during the phone demo.\n\n" + task_lines,
+            "spark-beat4-project-tasks",
+        )
+        files["project_tasks"] = str(task_path.relative_to(WORKSPACE_ROOT))
+
+        design_path = self.resolve_workspace_markdown_path("realtime_design.md", "realtime design")
+        design_body = "\n".join([
+            "Handwritten notes added these implementation details to the realtime dashboard design:",
+            "",
+            "- Streaming updates should be pushed live to connected React dashboards.",
+            "- Redis pub/sub fans events out across FastAPI instances.",
+            "- An events table in MySQL keeps durable history for reconnect and catch-up.",
+            "- A React hook should own subscription, state updates, and reconnect handling.",
+            "- Reconnect behavior needs an explicit test path.",
+        ])
+        self.upsert_markdown_section(
+            design_path,
+            "Handwritten Follow-Up",
+            design_body,
+            "spark-beat4-realtime-followup",
+        )
+        files["realtime_design"] = str(design_path.relative_to(WORKSPACE_ROOT))
+
+        personal_path = self.resolve_workspace_markdown_path("personal_todos.md", "personal todos")
+        personal_lines = "\n".join(f"- [ ] {task}" for task in personal_tasks) or "- [ ] Review personal notes"
+        self.upsert_markdown_section(
+            personal_path,
+            "Personal Todos",
+            personal_lines,
+            "spark-beat4-personal-todos",
+        )
+        files["personal_todos"] = str(personal_path.relative_to(WORKSPACE_ROOT))
+
+        return {
+            "files": files,
+            "project_tasks": project_tasks,
+            "personal_tasks": personal_tasks,
+        }
+
+    async def execute_workspace_update_agent(self, task: str, context: str = "", items: list = None):
+        """Route handwritten todos into the shared workspace files."""
+        try:
+            todos = self.extract_workspace_todos(task, context, items)
+            result = self.apply_workspace_todo_updates(todos)
+            files = result["files"]
+            summary = (
+                "Done. I updated the project tasks, realtime design, and personal todos."
+            )
+
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": (
+                    f"{summary} Files: {files['project_tasks']}, "
+                    f"{files['realtime_design']}, {files['personal_todos']}"
+                )
+            })
+            await self.send_message("workspace_update_complete", {
+                "summary": summary,
+                "files": files,
+                "project_tasks": result["project_tasks"],
+                "personal_tasks": result["personal_tasks"],
+            })
+            await self.stream_tts(summary)
+        except Exception as e:
+            print(f"[Voice Session] Workspace update agent error: {e}")
+            import traceback
+            traceback.print_exc()
+            await self.send_message("error", {"error": f"Workspace update error: {str(e)}"})
+
+    async def execute_markdown_agent(self, task: str, context: str = "", output_path: str = ""):
         """Execute the markdown assistant agent and stream results."""
         try:
             print(f"[Voice Session] Executing markdown agent: {task[:50]}...")
@@ -1279,35 +1554,52 @@ CRITICAL INSTRUCTIONS:
             # Create LLM client for agent
             agent_llm = LlamaCppClient(LLMConfig())
             md_response = ""
+            stream_path, file_path = self.begin_markdown_workspace_stream(task, output_path)
+            print(f"[Voice Session] Streaming markdown to {file_path}")
             
             # Send initial chunk to signal start
             await self.send_message("agent_markdown_chunk", {"content": "", "done": False})
             
-            async for chunk in agent_llm.stream_complete(md_messages, tools=None):
-                if chunk.startswith("data: "):
-                    try:
-                        data = json.loads(chunk[6:])
-                        if "content" in data and data["content"]:
-                            content = data["content"]
-                            md_response += content
-                            await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
-                    except json.JSONDecodeError:
-                        pass
-                elif chunk.strip() and not chunk.startswith("data: "):
-                    md_response += chunk
-                    await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
+            with stream_path.open("a", encoding="utf-8") as stream_file:
+                async for chunk in agent_llm.stream_complete(md_messages, tools=None):
+                    if chunk.startswith("data: "):
+                        try:
+                            data = json.loads(chunk[6:])
+                            if "content" in data and data["content"]:
+                                content = data["content"]
+                                md_response += content
+                                stream_file.write(content)
+                                stream_file.flush()
+                                await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
+                        except json.JSONDecodeError:
+                            pass
+                    elif chunk.strip() and not chunk.startswith("data: "):
+                        md_response += chunk
+                        stream_file.write(chunk)
+                        stream_file.flush()
+                        await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
             
             # Clean up response
             if md_response:
                 md_response = agent_llm._extract_final_channel(md_response)
             
             print(f"[Voice Session] Markdown generation complete: {len(md_response)} chars")
+
+            file_path = ""
+            if md_response.strip():
+                file_path = self.write_markdown_to_workspace(task, md_response, output_path)
+                print(f"[Voice Session] Markdown written to {file_path}")
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": f"Created {file_path} for: {task}"
+                })
             
             # Signal completion
             await self.send_message("agent_markdown_chunk", {"content": "", "done": True})
             await self.send_message("agent_markdown_complete", {
                 "task": task,
-                "markdown": md_response
+                "markdown": md_response,
+                "file_path": file_path
             })
             
         except Exception as e:
@@ -1847,7 +2139,8 @@ async def voice_call(websocket: WebSocket):
                                 from prompts import VIDEO_CALL_PROMPT, DEFAULT_SYSTEM_PROMPT
 
                                 # Combine personal context with video call prompt
-                                system_prompt = custom_prompt or f"{DEFAULT_SYSTEM_PROMPT}\n\n{VIDEO_CALL_PROMPT}"
+                                base_prompt = custom_prompt or DEFAULT_SYSTEM_PROMPT
+                                system_prompt = f"{base_prompt}\n\n{VIDEO_CALL_PROMPT}"
 
                                 # Add face context to system prompt if we recognized anyone
                                 if face_context:
@@ -1895,10 +2188,23 @@ async def voice_call(websocket: WebSocket):
                                                 args = json.loads(func.get("arguments", "{}"))
                                             except Exception:
                                                 args = {}
-                                            if tool_name in ("markdown_assistant", "html_assistant", "reasoning_assistant"):
-                                                await session.stream_tts("On it.", is_transient=True)
+                                            if tool_name in (
+                                                "markdown_assistant",
+                                                "html_assistant",
+                                                "reasoning_assistant",
+                                                "workspace_update_assistant",
+                                            ):
+                                                if tool_name == "workspace_update_assistant":
+                                                    ack = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
+                                                else:
+                                                    ack = "On it."
+                                                await session.stream_tts(ack, is_transient=True)
                                                 if tool_name == "markdown_assistant":
-                                                    await session.execute_markdown_agent(args.get("task", ""), args.get("context", ""))
+                                                    await session.execute_markdown_agent(
+                                                        args.get("task", ""),
+                                                        args.get("context", ""),
+                                                        args.get("output_path", ""),
+                                                    )
                                                 elif tool_name == "html_assistant":
                                                     await session.execute_html_agent(args.get("task", ""), args.get("context", ""))
                                                 elif tool_name == "reasoning_assistant":
@@ -1906,6 +2212,12 @@ async def voice_call(websocket: WebSocket):
                                                         args.get("problem", ""),
                                                         args.get("context", ""),
                                                         args.get("analysis_type", "general"),
+                                                    )
+                                                elif tool_name == "workspace_update_assistant":
+                                                    await session.execute_workspace_update_agent(
+                                                        args.get("task", "Add handwritten todos to the project"),
+                                                        args.get("context", ""),
+                                                        args.get("items", []),
                                                     )
                                                 agent_dispatched = True
                                                 break

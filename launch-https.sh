@@ -39,6 +39,21 @@ export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-$HF_HOME/hub}"
 # Create cache directory if it doesn't exist
 mkdir -p "$HUGGINGFACE_HUB_CACHE"
 
+# Parse command line flags before printing the effective configuration.
+for arg in "$@"; do
+    case $arg in
+        --local-asr)
+            export ASR_MODE="local"
+            ;;
+        --tts-overlap)
+            export TTS_OVERLAP="true"
+            ;;
+        --trtllm)
+            export LLM_BACKEND="trtllm"
+            ;;
+    esac
+done
+
 # SSL certificate paths
 SSL_KEY="${SSL_KEY:-key.pem}"
 SSL_CERT="${SSL_CERT:-cert.pem}"
@@ -97,27 +112,93 @@ echo "⚠️  Note: If using self-signed certificate,"
 echo "   you'll need to accept browser security warning"
 echo ""
 
-# Parse command line flags
 for arg in "$@"; do
     case $arg in
         --local-asr)
-            export ASR_MODE="local"
             echo "✅ Local ASR enabled (in-process faster-whisper)"
             ;;
         --tts-overlap)
-            export TTS_OVERLAP="true"
             echo "✅ TTS/LLM overlap enabled (parallel TTS generation)"
             ;;
         --trtllm)
-            export LLM_BACKEND="trtllm"
             echo "✅ TensorRT-LLM backend enabled"
             ;;
     esac
 done
+
+if ! command -v uvicorn >/dev/null 2>&1; then
+    echo "ERROR: uvicorn not found. Activate the virtualenv and install dependencies first:"
+    echo "  source venv/bin/activate"
+    echo "  pip install -r requirements.txt"
+    exit 1
+fi
+
+if [ "$ASR_MODE" == "local" ]; then
+    python - <<'PY'
+import os
+import sys
+
+try:
+    import ctranslate2
+    import faster_whisper  # noqa: F401
+except ModuleNotFoundError as exc:
+    print(f"ERROR: local ASR dependency missing: {exc.name}")
+    print("Install dependencies with: pip install -r requirements.txt")
+    sys.exit(1)
+
+if os.getenv("ASR_DEVICE", "cuda") == "cuda":
+    try:
+        cuda_types = ctranslate2.get_supported_compute_types("cuda")
+    except Exception as exc:
+        print(f"WARNING: CTranslate2 CUDA unavailable ({exc}); local ASR will fall back to CPU.")
+    else:
+        if "float16" not in cuda_types:
+            print(f"WARNING: CTranslate2 CUDA compute types are {cuda_types}; local ASR may fall back to CPU.")
+PY
+fi
+
+check_tcp_url() {
+    local label="$1"
+    local url="$2"
+
+    python - "$label" "$url" <<'PY'
+import socket
+import sys
+from urllib.parse import urlparse
+
+label, url = sys.argv[1], sys.argv[2]
+parsed = urlparse(url)
+host = parsed.hostname
+port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+if not host:
+    sys.exit(0)
+
+try:
+    with socket.create_connection((host, port), timeout=1.0):
+        pass
+except OSError as exc:
+    print(f"WARNING: {label} is not reachable at {host}:{port} ({exc}).")
+    sys.exit(1)
+PY
+}
+
+if ! check_tcp_url "LLM/VLM server" "$LLM_SERVER_URL"; then
+    echo "WARNING: Start the README llama.cpp server before using chat or video calls."
+fi
+if [ "$VLM_SERVER_URL" != "$LLM_SERVER_URL" ]; then
+    if ! check_tcp_url "VLM server" "$VLM_SERVER_URL"; then
+        echo "WARNING: Start the README VLM llama.cpp server before using video calls."
+    fi
+fi
+if [ "$ASR_MODE" != "local" ]; then
+    if ! check_tcp_url "ASR server" "$ASR_API_URL"; then
+        echo "WARNING: Start the ASR server or relaunch with --local-asr."
+    fi
+fi
 
 # Launch server with SSL
 # Use exec to replace shell process so signals (SIGTERM, SIGINT) go directly to uvicorn
 exec uvicorn server:app --host 0.0.0.0 --port "$PORT" \
     --ssl-keyfile "$SSL_KEY" \
     --ssl-certfile "$SSL_CERT"
-

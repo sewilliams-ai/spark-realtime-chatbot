@@ -319,12 +319,49 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "markdown_assistant",
-            "description": "Open the streaming markdown editor for long-form documentation. Use when the user asks to write a README, guide, or any substantial markdown document.",
+            "description": "A markdown documentation assistant that writes README files, design docs, guides, and other markdown documents into the shared workspace/ scratch folder. Use this when the user asks to convert a diagram, whiteboard, notes, or design into markdown.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "task": {"type": "string", "description": "The documentation task."},
-                    "context": {"type": "string", "description": "Optional project/topic context."},
+                    "task": {
+                        "type": "string",
+                        "description": "The documentation task description, e.g. 'Write a README for my project' or 'Create API documentation for the user service'"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional context about the project or topic to document"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional relative markdown path inside workspace/. Use 'README.md' for a project README and 'realtime_design.md' for a realtime architecture sketch."
+                    }
+                },
+                "required": ["task"]
+            }
+        }
+    },
+
+    "workspace_update_assistant": {
+        "type": "function",
+        "function": {
+            "name": "workspace_update_assistant",
+            "description": "Updates multiple files in the shared workspace/ scratch folder from handwritten notes or todos. Use this when the user says to add notes, todos, or action items to the project, especially when some items belong in project_dashboard/tasks.md, realtime_design.md, and personal_todos.md. Do not use markdown_assistant for multi-file todo routing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The workspace update request, e.g. 'Add these handwritten todos to the project'"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Visible handwritten notes or extracted todo items, plus any relevant project context"
+                    },
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional extracted todo items from the visible note"
+                    }
                 },
                 "required": ["task"],
             },
@@ -999,7 +1036,7 @@ _INLINE_DISPATCH = {
 
 def is_agent_tool(tool_name: str) -> bool:
     """UI-dispatched agent tools return a sentinel payload; loop should not re-prompt."""
-    return tool_name in ("markdown_assistant", "reasoning_assistant")
+    return tool_name in ("markdown_assistant", "reasoning_assistant", "workspace_update_assistant")
 
 
 async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -1012,11 +1049,15 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
 
     # UI agent tools — sentinel response, server.py opens the UI
     if tool_name == "markdown_assistant":
+        task = arguments.get("task", "")
+        context = arguments.get("context", "")
+        output_path = arguments.get("output_path", "")
         return json.dumps({
             "agent_type": "markdown_assistant",
-            "task": arguments.get("task", ""),
-            "context": arguments.get("context", ""),
-            "status": "initiated",
+            "task": task,
+            "context": context,
+            "output_path": output_path,
+            "status": "initiated"
         })
     if tool_name == "reasoning_assistant":
         return json.dumps({
@@ -1025,6 +1066,18 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             "context": arguments.get("context", ""),
             "analysis_type": arguments.get("analysis_type", "general"),
             "status": "initiated",
+        })
+
+    if tool_name == "workspace_update_assistant":
+        task = arguments.get("task", "")
+        context = arguments.get("context", "")
+        items = arguments.get("items", [])
+        return json.dumps({
+            "agent_type": "workspace_update_assistant",
+            "task": task,
+            "context": context,
+            "items": items if isinstance(items, list) else [],
+            "status": "initiated"
         })
 
     return json.dumps({"error": f"unknown tool: {tool_name}"})
