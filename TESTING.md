@@ -419,6 +419,32 @@ INFO:     Uvicorn running on https://0.0.0.0:8445 (Press CTRL+C to quit)
 INFO:     Application startup complete.
 ```
 
+**Feature: Venv-local FFmpeg fallback for browser mic audio**
+**Test #1: imageio-ffmpeg binary is available to audio decoder**
+**Status:** PASS
+**Code Command**:
+```bash
+FFMPEG_BIN="$($PWD/.venv-gpu/bin/python - <<'PY'
+import imageio_ffmpeg
+print(imageio_ffmpeg.get_ffmpeg_exe())
+PY
+)"
+"$FFMPEG_BIN" -version | sed -n '1,2p'
+FFMPEG_PATH="$FFMPEG_BIN" .venv-gpu/bin/python - <<'PY'
+from config import FFMPEG_PATH
+from audio import check_ffmpeg_available
+print('ffmpeg_path', FFMPEG_PATH)
+print('available', check_ffmpeg_available())
+PY
+```
+**Result**:
+```bash
+ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2024 the FFmpeg developers
+built with gcc 8 (Debian 8.3.0-6)
+ffmpeg_path /home/nvidia/selena/spark-realtime-chatbot/.venv-gpu/lib/python3.12/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-aarch64-v7.0.2
+available True
+```
+
 **Feature: Clean menu recommendation wording**
 **Test #1: Prompt syntax validation**
 **Status:** PASS
