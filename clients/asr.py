@@ -199,15 +199,17 @@ class LocalWhisperASR(BaseASR):
                     import ctranslate2
                     cuda_types = ctranslate2.get_supported_compute_types("cuda")
                     if not cuda_types or "float16" not in cuda_types:
-                        print(f"[ASR] CUDA not available in CTranslate2, falling back to CPU")
-                        device = "cpu"
-                        compute_type = "float32"  # float32 is safe fallback for CPU
+                        raise RuntimeError(
+                            f"CTranslate2 CUDA compute types are {cuda_types}; "
+                            "ASR_DEVICE=cuda requires float16 support."
+                        )
                     else:
                         print(f"[ASR] CUDA compute types available: {cuda_types}")
                 except Exception as e:
-                    print(f"[ASR] Error checking CUDA support: {e}, falling back to CPU")
-                    device = "cpu"
-                    compute_type = "float32"
+                    raise RuntimeError(
+                        "ASR_DEVICE=cuda was requested, but CTranslate2 CUDA is unavailable. "
+                        "Refusing to run ASR on CPU."
+                    ) from e
 
             print(f"[ASR] Loading model {self.cfg.model} on {device} ({compute_type})...")
             self._model = WhisperModel(

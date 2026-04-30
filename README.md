@@ -109,6 +109,14 @@ pip install -r requirements.txt
 
 Open **https://localhost:8443**. Accept the self-signed cert and allow the microphone.
 
+For the Spark demo machine, use the CUDA-ready dev launcher:
+
+```bash
+./launch-gpu-dev.sh
+```
+
+That starts HTTPS on **https://localhost:8445**, enables uvicorn reload, runs local faster-whisper ASR on CUDA, and runs Kokoro TTS on CUDA. The launcher prefers `.venv-gpu/` when present so it does not accidentally use a host Python with CPU-only torch or CTranslate2.
+
 ---
 
 ## Configuration
@@ -126,7 +134,7 @@ All defaults live in `config.py` and can be overridden via environment variables
 | `ASR_MODEL` | `Systran/faster-whisper-small.en` | Whisper model |
 | `KOKORO_VOICE` | `af_bella` | TTS voice (Kokoro only) |
 | `TTS_ENGINE` | `kokoro` | `kokoro` (default) or `chatterbox` (experimental; see bench above) |
-| `TTS_DEVICE` | `cpu` | `cuda` or `cpu`. Kokoro CUDA blocked on Blackwell; Chatterbox CUDA works. |
+| `TTS_DEVICE` | `cuda` | `cuda` or `cpu`. Kokoro CUDA requires torch cu130 wheels on GB10. |
 | `TTS_OVERLAP` | `false` | Start TTS while LLM still streaming |
 
 ---

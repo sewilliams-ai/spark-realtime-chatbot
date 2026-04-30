@@ -1,6 +1,16 @@
 #!/bin/bash
 # Launch script for spark-realtime-chatbot
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Prefer the local CUDA-ready environment when it exists. This keeps the demo
+# path off the host/user Python, which may have CPU-only torch/ctranslate2.
+if [ -d "$SCRIPT_DIR/.venv-gpu" ]; then
+    export VIRTUAL_ENV="$SCRIPT_DIR/.venv-gpu"
+    export PATH="$VIRTUAL_ENV/bin:$PATH"
+    export LD_LIBRARY_PATH="$VIRTUAL_ENV/lib:${LD_LIBRARY_PATH:-}"
+fi
+
 # Default configuration - override with environment variables
 export ASR_MODE="${ASR_MODE:-api}"  # "api" for server, "local" for in-process
 export ASR_API_URL="${ASR_API_URL:-http://localhost:8000/v1/audio/transcriptions}"
@@ -31,6 +41,7 @@ export TTS_DEVICE="${TTS_DEVICE:-cuda}"           # cuda (default, 70× RT on GB
 export KOKORO_LANG="${KOKORO_LANG:-a}"
 export KOKORO_VOICE="${KOKORO_VOICE:-af_bella}"
 export TTS_OVERLAP="${TTS_OVERLAP:-false}"  # Overlap TTS with LLM streaming
+export UVICORN_RELOAD="${UVICORN_RELOAD:-false}"
 
 # HuggingFace cache directory (defaults to /home/nvidia/hfcache if not set)
 # Set HF_HOME to override the default ~/.cache/huggingface location
@@ -50,6 +61,9 @@ for arg in "$@"; do
             ;;
         --trtllm)
             export LLM_BACKEND="trtllm"
+            ;;
+        --dev|--reload)
+            export UVICORN_RELOAD="true"
             ;;
     esac
 done
@@ -102,6 +116,7 @@ echo "VLM URL: $VLM_SERVER_URL"
 echo "VLM Model: $VLM_MODEL"
 echo "VLM Max Tokens: $VLM_MAX_TOKENS"
 echo "TTS Overlap: $TTS_OVERLAP"
+echo "Dev Reload: $UVICORN_RELOAD"
 echo "HF Cache: $HUGGINGFACE_HUB_CACHE"
 echo "Port: $PORT (HTTPS)"
 echo "SSL Key: $SSL_KEY"
@@ -122,6 +137,9 @@ for arg in "$@"; do
             ;;
         --trtllm)
             echo "✅ TensorRT-LLM backend enabled"
+            ;;
+        --dev|--reload)
+            echo "✅ Uvicorn reload enabled"
             ;;
     esac
 done
@@ -150,10 +168,35 @@ if os.getenv("ASR_DEVICE", "cuda") == "cuda":
     try:
         cuda_types = ctranslate2.get_supported_compute_types("cuda")
     except Exception as exc:
-        print(f"WARNING: CTranslate2 CUDA unavailable ({exc}); local ASR will fall back to CPU.")
+        print(f"ERROR: CTranslate2 CUDA unavailable ({exc}).")
+        print("Local ASR was requested on CUDA, so refusing to start on CPU.")
+        sys.exit(1)
     else:
         if "float16" not in cuda_types:
-            print(f"WARNING: CTranslate2 CUDA compute types are {cuda_types}; local ASR may fall back to CPU.")
+            print(f"ERROR: CTranslate2 CUDA compute types are {cuda_types}; expected float16.")
+            print("Local ASR was requested on CUDA, so refusing to start on CPU.")
+            sys.exit(1)
+        print(f"✅ CTranslate2 CUDA compute types: {sorted(cuda_types)}")
+PY
+fi
+
+if [ "$TTS_DEVICE" == "cuda" ]; then
+    python - <<'PY'
+import sys
+
+try:
+    import torch
+    from kokoro import KPipeline  # noqa: F401
+except ModuleNotFoundError as exc:
+    print(f"ERROR: TTS dependency missing: {exc.name}")
+    sys.exit(1)
+
+if not torch.cuda.is_available():
+    print("ERROR: Torch CUDA unavailable.")
+    print("TTS_DEVICE=cuda was requested, so refusing to start on CPU.")
+    sys.exit(1)
+
+print(f"✅ Torch CUDA device for TTS: {torch.cuda.get_device_name(0)}")
 PY
 fi
 
@@ -197,8 +240,18 @@ if [ "$ASR_MODE" != "local" ]; then
     fi
 fi
 
-# Launch server with SSL
-# Use exec to replace shell process so signals (SIGTERM, SIGINT) go directly to uvicorn
-exec uvicorn server:app --host 0.0.0.0 --port "$PORT" \
-    --ssl-keyfile "$SSL_KEY" \
+# Launch server with SSL.
+# Use exec to replace shell process so signals (SIGTERM, SIGINT) go directly to uvicorn.
+UVICORN_ARGS=(
+    server:app
+    --host 0.0.0.0
+    --port "$PORT"
+    --ssl-keyfile "$SSL_KEY"
     --ssl-certfile "$SSL_CERT"
+)
+
+if [ "$UVICORN_RELOAD" == "true" ]; then
+    UVICORN_ARGS+=(--reload --reload-exclude ".venv-gpu/*" --reload-exclude "audio_cache/*")
+fi
+
+exec uvicorn "${UVICORN_ARGS[@]}"

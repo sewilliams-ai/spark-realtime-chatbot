@@ -32,11 +32,12 @@ class KokoroTTS:
         print(f"[TTS] Loading Kokoro pipeline (lang={cfg.lang_code}, voice={cfg.voice})...")
         self.cfg = cfg
 
-        # Force CPU for TTS - Blackwell GPU (sm_121) CUDA kernels not fully supported yet
         device = cfg.device if hasattr(cfg, 'device') else 'cpu'
         if device == 'cuda' and not self._check_cuda_support():
-            print("[TTS] WARNING: CUDA not fully supported, falling back to CPU")
-            device = 'cpu'
+            raise RuntimeError(
+                "TTS_DEVICE=cuda was requested, but Torch CUDA is unavailable. "
+                "Refusing to run TTS on CPU."
+            )
 
         self.pipeline = KPipeline(lang_code=cfg.lang_code, device=device)
         print(f"[TTS] Pipeline loaded on device: {device}")
@@ -282,4 +283,3 @@ def create_tts(cfg: TTSConfig):
     if engine != "kokoro":
         print(f"[TTS] unknown engine {engine!r}, falling back to kokoro")
     return KokoroTTS(cfg)
-

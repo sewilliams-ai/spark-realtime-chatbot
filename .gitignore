@@ -25,6 +25,7 @@ venv/
 ENV/
 env/
 .venv/
+.venv-gpu/
 
 # IDE
 .idea/
@@ -69,4 +70,3 @@ temp/
 
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/
-
