@@ -8,6 +8,7 @@ numpy
 torch
 aiohttp
 python-multipart
+faster-whisper
 llm-sandbox[docker]
 # Face recognition
 deepface
