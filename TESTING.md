@@ -445,6 +445,22 @@ ffmpeg_path /home/nvidia/selena/spark-realtime-chatbot/.venv-gpu/lib/python3.12/
 available True
 ```
 
+**Feature: 8445 GPU dev server after environment fix**
+**Test #1: Detached server health check**
+**Status:** PASS
+**Code Command**: `setsid bash -c 'exec ./launch-gpu-dev.sh' > logs/gpu-dev-8445.log 2>&1 < /dev/null & ...; curl -ks https://localhost:8445/health`
+**Result**:
+```bash
+{"status":"ok"}
+
+Startup log confirmed:
+FFmpeg: /home/nvidia/selena/spark-realtime-chatbot/.venv-gpu/lib/python3.12/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-aarch64-v7.0.2
+CTranslate2 CUDA compute types: ['bfloat16', 'float16', 'float32', 'int8', 'int8_bfloat16', 'int8_float16', 'int8_float32']
+Torch CUDA device for TTS: NVIDIA GB10
+[ASR] Loading model Systran/faster-whisper-small.en on cuda (float16)...
+[TTS] Pipeline loaded on device: cuda
+```
+
 **Feature: Clean menu recommendation wording**
 **Test #1: Prompt syntax validation**
 **Status:** PASS
