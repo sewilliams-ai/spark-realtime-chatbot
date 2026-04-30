@@ -1,3 +1,119 @@
+**Feature: Post-merge claw demo regression rerun**
+**Test #1: Syntax, JavaScript, and whitespace checks**
+**Status:** PASS
+**Code Command**: `python3 -m py_compile server.py prompts.py tools.py clients/*.py && node --check static/js/app.js && git diff --check HEAD`
+**Result**:
+```bash
+No output. Commands exited successfully.
+```
+
+**Feature: Post-merge claw demo regression rerun**
+**Test #2: Tool schema sentinel validation**
+**Status:** PASS
+**Code Command**:
+```bash
+python3 - <<'PY'
+import json
+import asyncio
+from tools import ALL_TOOLS, execute_tool, is_agent_tool
+
+assert 'workspace_update_assistant' in ALL_TOOLS
+assert 'output_path' in ALL_TOOLS['markdown_assistant']['function']['parameters']['properties']
+assert is_agent_tool('workspace_update_assistant')
+
+async def main():
+    md = json.loads(await execute_tool('markdown_assistant', {
+        'task': 'Convert this hand-drawn architecture into a Markdown README',
+        'context': 'React frontend -> FastAPI backend -> MySQL',
+        'output_path': 'README.md',
+    }))
+    ws = json.loads(await execute_tool('workspace_update_assistant', {
+        'task': 'Add these to the project',
+        'items': ['add streaming updates', 'Redis pub/sub', 'write events table', 'React hook', 'test reconnect', 'buy umbrella'],
+    }))
+    assert md['agent_type'] == 'markdown_assistant'
+    assert md['output_path'] == 'README.md'
+    assert ws['agent_type'] == 'workspace_update_assistant'
+    assert len(ws['items']) == 6
+    print('markdown:', md)
+    print('workspace:', ws)
+
+asyncio.run(main())
+PY
+```
+**Result**:
+```bash
+markdown: {'agent_type': 'markdown_assistant', 'task': 'Convert this hand-drawn architecture into a Markdown README', 'context': 'React frontend -> FastAPI backend -> MySQL', 'output_path': 'README.md', 'status': 'initiated'}
+workspace: {'agent_type': 'workspace_update_assistant', 'task': 'Add these to the project', 'context': '', 'items': ['add streaming updates', 'Redis pub/sub', 'write events table', 'React hook', 'test reconnect', 'buy umbrella'], 'status': 'initiated'}
+```
+
+**Feature: Post-merge claw demo regression rerun**
+**Test #3: Beat 4 deterministic routing**
+**Status:** PASS
+**Code Command**:
+```bash
+python3 - <<'PY'
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import server
+
+with TemporaryDirectory() as tmp:
+    server.WORKSPACE_ROOT = Path(tmp).resolve()
+    session = server.VoiceSession.__new__(server.VoiceSession)
+    assert session.infer_markdown_output_path('Convert this hand-drawn architecture into a Markdown README for the project.') == 'README.md'
+    assert session.infer_markdown_output_path('Yeah, sketch the Redis pub/sub realtime design.') == 'realtime_design.md'
+    assert session.is_workspace_update_request('Add these to the project')
+    assert session.is_workspace_update_request('Can you add these handwritten todos to the project?')
+    assert not session.is_workspace_update_request('What should I order from this menu?')
+    todos = session.extract_workspace_todos(
+        'Add these to the project',
+        'Visible handwritten note: add streaming updates; Redis pub/sub; write events table; React hook; test reconnect; buy umbrella',
+        []
+    )
+    result = session.apply_workspace_todo_updates(todos)
+    root = Path(tmp)
+    tasks = (root / result['files']['project_tasks']).read_text()
+    design = (root / result['files']['realtime_design']).read_text()
+    personal = (root / result['files']['personal_todos']).read_text()
+    assert 'Add streaming updates' in tasks
+    assert 'Add Redis pub/sub' in tasks
+    assert 'Test reconnect' in tasks
+    assert 'Buy umbrella' not in tasks
+    assert 'Redis pub/sub fans events out across FastAPI instances' in design
+    assert 'Buy umbrella' in personal
+    print('routing: PASS')
+    print('todos:', todos)
+    print('files:', result['files'])
+PY
+```
+**Result**:
+```bash
+routing: PASS
+todos: ['Add streaming updates', 'Add Redis pub/sub', 'Write events table', 'Build React hook', 'Test reconnect', 'Buy umbrella']
+files: {'project_tasks': 'workspace/project_dashboard/tasks.md', 'realtime_design': 'workspace/realtime_design.md', 'personal_todos': 'workspace/personal_todos.md'}
+```
+
+**Feature: GPU runtime availability**
+**Test #1: Docker CUDA GPU visibility**
+**Status:** PASS
+**Code Command**: `docker run --rm --gpus all nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader`
+**Result**:
+```bash
+NVIDIA GB10, 580.95.05
+```
+
+**Feature: GPU runtime availability**
+**Test #2: Host Python CUDA package check**
+**Status:** INFO
+**Code Command**: `python3 - <<'PY' ... torch and ctranslate2 CUDA checks ... PY`
+**Result**:
+```bash
+host_torch: 2.10.0+cpu
+host_cuda_available: False
+host_ctranslate2: 4.7.1
+host_ct2_cuda_error: ValueError This CTranslate2 package was not compiled with CUDA support
+```
+
 **Feature: Claw/main demo merge regression**
 **Test #1: Post-merge syntax and whitespace validation**
 **Status:** PASS
