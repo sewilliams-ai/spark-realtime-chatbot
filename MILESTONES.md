@@ -1,5 +1,27 @@
 # Milestones
 
+## 2026-04-30 - WHOOP Integration
+
+**Status:** In Progress
+
+### Goal
+
+Add WHOOP data integration so the assistant can use private recovery, sleep, strain, and recent activity context in health-aware recommendations while keeping the user data local to the Spark demo environment.
+
+### Planned Scope
+
+- Define the WHOOP auth and data-access flow for local development.
+- Add a local integration layer for pulling and caching WHOOP health signals.
+- Expose summarized WHOOP context to the assistant prompts/tools without leaking raw data unnecessarily.
+- Add demo-safe responses that combine WHOOP signals with visual context, food history, and personal preferences.
+- Add prompt and runtime tests covering health-context retrieval, privacy wording, and graceful behavior when WHOOP data is unavailable.
+
+### Current Status
+
+- Milestone created.
+- Implementation not started yet.
+- No WHOOP-specific tests have been run yet.
+
 ## 2026-04-30 - Claw Demo Integration And GPU Runtime
 
 **Recorded commit:** `733ca23 [docs] record final GPU dev server health check`
