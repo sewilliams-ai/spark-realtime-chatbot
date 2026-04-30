@@ -1,3 +1,34 @@
+**Feature: Live prompt regression against local Qwen3.6**
+**Test #1: Demo beats prompt and tool-call behavior**
+**Status:** PASS
+**Code Command**: `python3 - <<'PY' ... live prompt suite against http://localhost:11434/v1/chat/completions using DEFAULT_SYSTEM_PROMPT, VIDEO_CALL_PROMPT, and enabled tool schemas ... PY`
+**Result**:
+```bash
+Cold open camera/audio response: PASS
+  text: Yep. You're on camera, audio is clear, and I'm ready.
+
+Beat 1 README tool call: PASS
+  tool: markdown_assistant
+  args: {'task': 'Convert the hand-drawn architecture into a Markdown README', 'context': 'Whiteboard shows: React frontend -> FastAPI backend -> MySQL database', 'output_path': 'README.md'}
+
+Beat 1 engineering judgment, no customer-data tool: PASS
+  text: Polling MySQL for dashboard updates won't scale. I'd keep MySQL as the source of truth, but add Redis pub/sub between FastAPI instances for realtime fanout. I can sketch that design.
+
+Beat 1 follow-up realtime design tool call: PASS
+  tool: markdown_assistant
+  args: {'task': 'Sketch a realtime architecture design for React Dashboard -> FastAPI -> MySQL with Redis pub/sub for realtime fanout', 'context': 'Whiteboard architecture shows React Dashboard -> FastAPI -> MySQL. User wants to improve it by adding Redis pub/sub for realtime updates instead of polling MySQL.', 'output_path': 'realtime_design.md'}
+
+Beat 2 fashion answer: PASS
+  text: Yep, that dark navy top looks professional and put together on camera. It's a solid choice for your calls today.
+
+Beat 3 private menu recommendation: PASS
+  text: I'd recommend the braised vegetables and steamed rice over the beef noodle soup. The vegetables offer a lighter, higher-protein option that aligns with your fitness goals, while the beef noodle soup is heavy in salt and carbs, especially after yesterday's ramen.
+
+Beat 4 handwritten todo workspace tool call: PASS
+  tool: workspace_update_assistant
+  args: {'task': 'Add these handwritten todos to the project', 'context': 'Handwritten note lists: add streaming updates; Redis pub/sub; write events table; React hook; test reconnect; buy umbrella.', 'items': ['add streaming updates', 'Redis pub/sub', 'write events table', 'React hook', 'test reconnect', 'buy umbrella']}
+```
+
 **Feature: Post-merge claw demo regression rerun**
 **Test #1: Syntax, JavaScript, and whitespace checks**
 **Status:** PASS
