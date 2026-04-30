@@ -318,6 +318,107 @@ Beat 4 todo routing tool: PASS :: workspace_update_assistant with all six handwr
 No output. Command exited successfully.
 ```
 
+**Feature: CUDA Python environment for ASR and TTS**
+**Test #1: Runtime syntax validation**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python -m py_compile clients/asr.py clients/tts.py server.py config.py && bash -n launch-https.sh && bash -n launch-gpu-dev.sh`
+**Result**:
+```bash
+No output. Commands exited successfully.
+```
+
+**Feature: CUDA Python environment for ASR and TTS**
+**Test #2: Torch and CTranslate2 CUDA capability**
+**Status:** PASS
+**Code Command**:
+```bash
+LD_LIBRARY_PATH=$PWD/.venv-gpu/lib:$LD_LIBRARY_PATH .venv-gpu/bin/python - <<'PY'
+import ctranslate2, torch
+print('torch', torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))
+print('ctranslate2', ctranslate2.__version__, sorted(ctranslate2.get_supported_compute_types('cuda')))
+PY
+```
+**Result**:
+```bash
+torch 2.11.0+cu130 True NVIDIA GB10
+ctranslate2 4.7.1 ['bfloat16', 'float16', 'float32', 'int8', 'int8_bfloat16', 'int8_float16', 'int8_float32']
+```
+
+**Feature: CUDA local ASR**
+**Test #1: faster-whisper warmup on GPU**
+**Status:** PASS
+**Code Command**:
+```bash
+LD_LIBRARY_PATH=$PWD/.venv-gpu/lib:$LD_LIBRARY_PATH HF_HOME=/home/nvidia/hfcache HUGGINGFACE_HUB_CACHE=/home/nvidia/hfcache/hub ASR_MODE=local ASR_DEVICE=cuda ASR_COMPUTE_TYPE=float16 ASR_MODEL=Systran/faster-whisper-small.en .venv-gpu/bin/python - <<'PY'
+from config import ASRConfig
+from clients.asr import LocalWhisperASR
+asr = LocalWhisperASR(ASRConfig())
+asr.warmup()
+print('asr_device', asr.cfg.device)
+print('asr_compute_type', asr.cfg.compute_type)
+print('model_loaded', asr._model is not None)
+PY
+```
+**Result**:
+```bash
+[ASR] Using local faster-whisper (model=Systran/faster-whisper-small.en, device=cuda)
+[ASR] Warming up model...
+[ASR] CUDA compute types available: {'int8_float16', 'int8_float32', 'float16', 'bfloat16', 'int8_bfloat16', 'float32', 'int8'}
+[ASR] Loading model Systran/faster-whisper-small.en on cuda (float16)...
+[ASR] Model loaded successfully
+[ASR] Warmup complete (965ms)
+asr_device cuda
+asr_compute_type float16
+model_loaded True
+```
+
+**Feature: CUDA Kokoro TTS**
+**Test #1: Synthesize audio on GPU**
+**Status:** PASS
+**Code Command**:
+```bash
+LD_LIBRARY_PATH=$PWD/.venv-gpu/lib:$LD_LIBRARY_PATH HF_HOME=/home/nvidia/hfcache HUGGINGFACE_HUB_CACHE=/home/nvidia/hfcache/hub TTS_DEVICE=cuda TTS_ENGINE=kokoro .venv-gpu/bin/python - <<'PY'
+from pathlib import Path
+from config import TTSConfig
+from clients.tts import create_tts
+import torch
+out = Path('/tmp/spark_kokoro_cuda_test.wav')
+tts = create_tts(TTSConfig())
+tts.synth_to_file('Yep. You are on camera, audio is clear, and I am ready.', out)
+print('tts_class', type(tts).__name__)
+print('torch_cuda', torch.cuda.is_available())
+print('device', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')
+print('wav_exists', out.exists(), 'bytes', out.stat().st_size if out.exists() else 0)
+PY
+```
+**Result**:
+```bash
+[TTS] Loading Kokoro pipeline (lang=a, voice=af_bella)...
+[TTS] Pipeline loaded on device: cuda
+tts_class KokoroTTS
+torch_cuda True
+device NVIDIA GB10
+wav_exists True bytes 171644
+```
+
+**Feature: 8445 GPU dev launcher**
+**Test #1: Startup reaches HTTPS server with CUDA checks**
+**Status:** PASS
+**Code Command**: `timeout 35 ./launch-gpu-dev.sh`
+**Result**:
+```bash
+ASR Mode: local
+ASR Device: cuda
+ASR Compute Type: float16
+TTS Overlap: true
+Dev Reload: true
+Port: 8445 (HTTPS)
+CTranslate2 CUDA compute types: ['bfloat16', 'float16', 'float32', 'int8', 'int8_bfloat16', 'int8_float16', 'int8_float32']
+Torch CUDA device for TTS: NVIDIA GB10
+INFO:     Uvicorn running on https://0.0.0.0:8445 (Press CTRL+C to quit)
+INFO:     Application startup complete.
+```
+
 **Feature: Clean menu recommendation wording**
 **Test #1: Prompt syntax validation**
 **Status:** PASS
