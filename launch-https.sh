@@ -11,6 +11,26 @@ if [ -d "$SCRIPT_DIR/.venv-gpu" ]; then
     export LD_LIBRARY_PATH="$VIRTUAL_ENV/lib:${LD_LIBRARY_PATH:-}"
 fi
 
+if [ -z "${FFMPEG_PATH:-}" ]; then
+    if command -v ffmpeg >/dev/null 2>&1; then
+        export FFMPEG_PATH="$(command -v ffmpeg)"
+    else
+        IMAGEIO_FFMPEG="$(
+            python - <<'PY' 2>/dev/null
+try:
+    import imageio_ffmpeg
+except Exception:
+    raise SystemExit(0)
+
+print(imageio_ffmpeg.get_ffmpeg_exe())
+PY
+        )"
+        if [ -n "$IMAGEIO_FFMPEG" ] && [ -x "$IMAGEIO_FFMPEG" ]; then
+            export FFMPEG_PATH="$IMAGEIO_FFMPEG"
+        fi
+    fi
+fi
+
 # Default configuration - override with environment variables
 export ASR_MODE="${ASR_MODE:-api}"  # "api" for server, "local" for in-process
 export ASR_API_URL="${ASR_API_URL:-http://localhost:8000/v1/audio/transcriptions}"
@@ -121,6 +141,7 @@ echo "HF Cache: $HUGGINGFACE_HUB_CACHE"
 echo "Port: $PORT (HTTPS)"
 echo "SSL Key: $SSL_KEY"
 echo "SSL Cert: $SSL_CERT"
+echo "FFmpeg: ${FFMPEG_PATH:-ffmpeg}"
 echo "=========================================="
 echo ""
 echo "⚠️  Note: If using self-signed certificate,"

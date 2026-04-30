@@ -115,7 +115,7 @@ For the Spark demo machine, use the CUDA-ready dev launcher:
 ./launch-gpu-dev.sh
 ```
 
-That starts HTTPS on **https://localhost:8445**, enables uvicorn reload, runs local faster-whisper ASR on CUDA, and runs Kokoro TTS on CUDA. The launcher prefers `.venv-gpu/` when present so it does not accidentally use a host Python with CPU-only torch or CTranslate2.
+That starts HTTPS on **https://localhost:8445**, enables uvicorn reload, runs local faster-whisper ASR on CUDA, and runs Kokoro TTS on CUDA. The launcher prefers `.venv-gpu/` when present so it does not accidentally use a host Python with CPU-only torch or CTranslate2. If system `ffmpeg` is not installed, it uses the `imageio-ffmpeg` binary from the venv for browser mic audio decoding.
 
 ---
 

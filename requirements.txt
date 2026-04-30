@@ -12,6 +12,7 @@ faster-whisper
 kokoro
 kokoro-tts
 soundfile
+imageio-ffmpeg
 numpy
 torch
 # Face recognition
