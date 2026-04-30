@@ -1864,7 +1864,7 @@ function createMessageElement(role, content = "", isTransient = false) {
   return { container: messageDiv, content: contentDiv };
 }
 
-function createMarkdownMessageElement(task, markdown) {
+function createMarkdownMessageElement(task, markdown, filePath = "") {
   const messageDiv = document.createElement("div");
   messageDiv.className = "message message-assistant";
   
@@ -1886,6 +1886,16 @@ function createMarkdownMessageElement(task, markdown) {
   taskDiv.style.color = "#2c3e50";
   taskDiv.textContent = `📄 ${task}`;
   contentDiv.appendChild(taskDiv);
+
+  if (filePath) {
+    const fileDiv = document.createElement("div");
+    fileDiv.style.marginBottom = "0.75rem";
+    fileDiv.style.fontSize = "0.85rem";
+    fileDiv.style.color = "#4b5563";
+    fileDiv.style.fontFamily = "var(--font-mono)";
+    fileDiv.textContent = `Saved to ${filePath}`;
+    contentDiv.appendChild(fileDiv);
+  }
   
   // Rendered markdown preview (truncated)
   const previewDiv = document.createElement("div");
@@ -2709,7 +2719,7 @@ async function handleMessage(data) {
     case "agent_markdown_complete":
       // Markdown assistant finished - add to conversation
       removeEmptyState();
-      const mdMsg = createMarkdownMessageElement(data.task, data.markdown);
+      const mdMsg = createMarkdownMessageElement(data.task, data.markdown, data.file_path || "");
       getActiveConversationEl().appendChild(mdMsg.container);
       scrollToBottom();
       saveCurrentChat();

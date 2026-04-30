@@ -808,6 +808,8 @@ class VoiceSession:
                             is_agent_tool = False
                             agent_type = None
                             agent_task = None
+                            agent_context = ""
+                            agent_output_path = ""
                             for tool_result in tool_results:
                                 try:
                                     result_data = json.loads(tool_result.get("content", "{}"))
@@ -815,6 +817,8 @@ class VoiceSession:
                                         is_agent_tool = True
                                         agent_type = result_data.get("agent_type")
                                         agent_task = result_data.get("task", "")
+                                        agent_context = result_data.get("context", "")
+                                        agent_output_path = result_data.get("output_path", "")
                                         break
                                 except json.JSONDecodeError:
                                     pass
@@ -839,7 +843,7 @@ CRITICAL INSTRUCTIONS:
                                     },
                                     {
                                         "role": "user",
-                                        "content": f"Write the following document: {agent_task}"
+                                        "content": f"Task: {agent_task}\n\nContext: {agent_context}" if agent_context else f"Task: {agent_task}"
                                     }
                                 ]
                                 
@@ -852,27 +856,37 @@ CRITICAL INSTRUCTIONS:
                                 markdown_response = ""
                                 reasoning_accumulated = ""
                                 chunk_count = 0
+                                stream_path, file_path = self.begin_markdown_workspace_stream(
+                                    agent_task,
+                                    agent_output_path
+                                )
+                                print(f"[Voice Session] Streaming markdown to {file_path}")
                                 
                                 # Stream tokens directly to markdown editor as they arrive
                                 await self.send_message("agent_markdown_chunk", {"content": "", "done": False})
                                 
-                                async for chunk in markdown_gen_llm.stream_complete(markdown_generation_messages, tools=None):
-                                    chunk_count += 1
-                                    if chunk.startswith("data: "):
-                                        try:
-                                            data = json.loads(chunk[6:])
-                                            if "content" in data and data["content"]:
-                                                content = data["content"]
-                                                markdown_response += content
-                                                # Stream to markdown editor immediately
-                                                await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
-                                            elif "reasoning_content" in data and data["reasoning_content"]:
-                                                reasoning_accumulated += data["reasoning_content"]
-                                        except json.JSONDecodeError:
-                                            pass
-                                    elif chunk.strip() and not chunk.startswith("data: "):
-                                        markdown_response += chunk
-                                        await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
+                                with stream_path.open("a", encoding="utf-8") as stream_file:
+                                    async for chunk in markdown_gen_llm.stream_complete(markdown_generation_messages, tools=None):
+                                        chunk_count += 1
+                                        if chunk.startswith("data: "):
+                                            try:
+                                                data = json.loads(chunk[6:])
+                                                if "content" in data and data["content"]:
+                                                    content = data["content"]
+                                                    markdown_response += content
+                                                    stream_file.write(content)
+                                                    stream_file.flush()
+                                                    # Stream to markdown editor immediately
+                                                    await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
+                                                elif "reasoning_content" in data and data["reasoning_content"]:
+                                                    reasoning_accumulated += data["reasoning_content"]
+                                            except json.JSONDecodeError:
+                                                pass
+                                        elif chunk.strip() and not chunk.startswith("data: "):
+                                            markdown_response += chunk
+                                            stream_file.write(chunk)
+                                            stream_file.flush()
+                                            await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
                                 
                                 print(f"[Voice Session] Markdown generation complete: {len(markdown_response)} chars")
                                 
@@ -891,18 +905,26 @@ CRITICAL INSTRUCTIONS:
                                     
                                     if markdown_response:
                                         print(f"[Voice Session] Markdown generated: {len(markdown_response)} characters")
+
+                                        file_path = self.write_markdown_to_workspace(
+                                            agent_task,
+                                            markdown_response,
+                                            agent_output_path
+                                        )
+                                        print(f"[Voice Session] Markdown written to {file_path}")
                                         
                                         # Signal completion
                                         await self.send_message("agent_markdown_chunk", {"content": "", "done": True})
                                         
                                         # Add to conversation history
-                                        markdown_summary = f"Generated documentation for: {agent_task}\n\n{markdown_response[:500]}{'...' if len(markdown_response) > 500 else ''}"
+                                        markdown_summary = f"Generated documentation at {file_path} for: {agent_task}\n\n{markdown_response[:500]}{'...' if len(markdown_response) > 500 else ''}"
                                         self.conversation_history.append({"role": "assistant", "content": markdown_summary})
                                         
                                         # Send a message to frontend to add markdown to conversation UI
                                         await self.send_message("agent_markdown_complete", {
                                             "task": agent_task,
-                                            "markdown": markdown_response
+                                            "markdown": markdown_response,
+                                            "file_path": file_path
                                         })
                                         return
                                     else:
@@ -1025,7 +1047,64 @@ CRITICAL INSTRUCTIONS:
         else:
             print(f"[Voice Session] No final_response to send!")
 
-    async def execute_markdown_agent(self, task: str, context: str = ""):
+    def infer_markdown_output_path(self, task: str) -> str:
+        """Infer a workspace-relative markdown path from the user's task."""
+        import re
+
+        task_lower = (task or "").lower()
+        if "readme" in task_lower:
+            return "README.md"
+        if any(term in task_lower for term in ["realtime", "real-time", "redis", "pub/sub", "fanout"]):
+            return "realtime_design.md"
+        if "personal" in task_lower and any(term in task_lower for term in ["todo", "to-do"]):
+            return "personal_todos.md"
+        if any(term in task_lower for term in ["task", "todo", "to-do"]) and any(term in task_lower for term in ["project", "dashboard"]):
+            return "project_dashboard/tasks.md"
+
+        slug = re.sub(r"[^a-z0-9]+", "-", task_lower).strip("-")[:48]
+        return f"{slug or 'document'}.md"
+
+    def resolve_workspace_markdown_path(self, output_path: str, task: str) -> Path:
+        """Resolve a model-provided path into the shared workspace directory."""
+        workspace_dir = WORKSPACE_ROOT / "workspace"
+        requested = (output_path or "").strip() or self.infer_markdown_output_path(task)
+        relative_path = Path(requested)
+
+        if relative_path.is_absolute():
+            relative_path = Path(relative_path.name)
+
+        parts = [part for part in relative_path.parts if part not in ("", ".", "..")]
+        if parts and parts[0].lower() == "workspace":
+            parts = parts[1:]
+        if not parts:
+            parts = ["document.md"]
+
+        safe_relative = Path(*parts)
+        if safe_relative.suffix.lower() != ".md":
+            safe_relative = safe_relative.with_suffix(".md")
+
+        workspace_resolved = workspace_dir.resolve()
+        output_resolved = (workspace_dir / safe_relative).resolve()
+        if output_resolved != workspace_resolved and workspace_resolved not in output_resolved.parents:
+            output_resolved = workspace_resolved / "document.md"
+
+        return output_resolved
+
+    def write_markdown_to_workspace(self, task: str, markdown: str, output_path: str = "") -> str:
+        """Write markdown into workspace/ and return a path relative to WORKSPACE_ROOT."""
+        path = self.resolve_workspace_markdown_path(output_path, task)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(markdown.rstrip() + "\n", encoding="utf-8")
+        return str(path.relative_to(WORKSPACE_ROOT))
+
+    def begin_markdown_workspace_stream(self, task: str, output_path: str = "") -> tuple[Path, str]:
+        """Create/truncate a workspace markdown file before streaming content into it."""
+        path = self.resolve_workspace_markdown_path(output_path, task)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+        return path, str(path.relative_to(WORKSPACE_ROOT))
+
+    async def execute_markdown_agent(self, task: str, context: str = "", output_path: str = ""):
         """Execute the markdown assistant agent and stream results."""
         try:
             print(f"[Voice Session] Executing markdown agent: {task[:50]}...")
@@ -1044,35 +1123,52 @@ CRITICAL INSTRUCTIONS:
             # Create LLM client for agent
             agent_llm = LlamaCppClient(LLMConfig())
             md_response = ""
+            stream_path, file_path = self.begin_markdown_workspace_stream(task, output_path)
+            print(f"[Voice Session] Streaming markdown to {file_path}")
             
             # Send initial chunk to signal start
             await self.send_message("agent_markdown_chunk", {"content": "", "done": False})
             
-            async for chunk in agent_llm.stream_complete(md_messages, tools=None):
-                if chunk.startswith("data: "):
-                    try:
-                        data = json.loads(chunk[6:])
-                        if "content" in data and data["content"]:
-                            content = data["content"]
-                            md_response += content
-                            await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
-                    except json.JSONDecodeError:
-                        pass
-                elif chunk.strip() and not chunk.startswith("data: "):
-                    md_response += chunk
-                    await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
+            with stream_path.open("a", encoding="utf-8") as stream_file:
+                async for chunk in agent_llm.stream_complete(md_messages, tools=None):
+                    if chunk.startswith("data: "):
+                        try:
+                            data = json.loads(chunk[6:])
+                            if "content" in data and data["content"]:
+                                content = data["content"]
+                                md_response += content
+                                stream_file.write(content)
+                                stream_file.flush()
+                                await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
+                        except json.JSONDecodeError:
+                            pass
+                    elif chunk.strip() and not chunk.startswith("data: "):
+                        md_response += chunk
+                        stream_file.write(chunk)
+                        stream_file.flush()
+                        await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
             
             # Clean up response
             if md_response:
                 md_response = agent_llm._extract_final_channel(md_response)
             
             print(f"[Voice Session] Markdown generation complete: {len(md_response)} chars")
+
+            file_path = ""
+            if md_response.strip():
+                file_path = self.write_markdown_to_workspace(task, md_response, output_path)
+                print(f"[Voice Session] Markdown written to {file_path}")
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": f"Created {file_path} for: {task}"
+                })
             
             # Signal completion
             await self.send_message("agent_markdown_chunk", {"content": "", "done": True})
             await self.send_message("agent_markdown_complete", {
                 "task": task,
-                "markdown": md_response
+                "markdown": md_response,
+                "file_path": file_path
             })
             
         except Exception as e:
@@ -1653,7 +1749,11 @@ async def voice_call(websocket: WebSocket):
 
                                             # Execute tool
                                             if tool_name == "markdown_assistant":
-                                                await session.execute_markdown_agent(args.get("task", ""), args.get("context", ""))
+                                                await session.execute_markdown_agent(
+                                                    args.get("task", ""),
+                                                    args.get("context", ""),
+                                                    args.get("output_path", "")
+                                                )
                                             elif tool_name == "html_assistant":
                                                 await session.execute_html_agent(args.get("task", ""), args.get("context", ""))
                                             elif tool_name == "reasoning_assistant":

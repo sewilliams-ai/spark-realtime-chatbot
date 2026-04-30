@@ -11,7 +11,7 @@ ALL_TOOLS = {
         "type": "function",
         "function": {
             "name": "markdown_assistant",
-            "description": "A markdown documentation assistant that can write README files, documentation, guides, and other markdown documents. Use this when the user asks to write documentation, create a README, write guides, or produce any markdown content.",
+            "description": "A markdown documentation assistant that writes README files, design docs, guides, and other markdown documents into the shared workspace/ scratch folder. Use this when the user asks to convert a diagram, whiteboard, notes, or design into markdown.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -22,6 +22,10 @@ ALL_TOOLS = {
                     "context": {
                         "type": "string",
                         "description": "Optional context about the project or topic to document"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional relative markdown path inside workspace/. Use 'README.md' for a project README and 'realtime_design.md' for a realtime architecture sketch."
                     }
                 },
                 "required": ["task"]
@@ -73,10 +77,12 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     if tool_name == "markdown_assistant":
         task = arguments.get("task", "")
         context = arguments.get("context", "")
+        output_path = arguments.get("output_path", "")
         return json.dumps({
             "agent_type": "markdown_assistant",
             "task": task,
             "context": context,
+            "output_path": output_path,
             "status": "initiated"
         })
 
