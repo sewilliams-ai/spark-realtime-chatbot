@@ -670,6 +670,7 @@ let videoCallVadInstance = null;
 let videoCallMuted = false;
 let videoCallCameraOn = true;
 let videoCallStream = null;
+let videoCallFacingMode = 'user';
 let videoCallWaveformBars = [];
 let videoCallSpeaking = false;
 let videoCallProcessing = false; // Flag to block VAD while processing a request
@@ -724,14 +725,7 @@ async function setupVideoCallMode() {
   
   // Start webcam
   try {
-    const video = document.getElementById('videoCallWebcam');
-    videoCallStream = await navigator.mediaDevices.getUserMedia({ 
-      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-      audio: false // Audio handled by VAD
-    });
-    video.srcObject = videoCallStream;
-    await video.play();
-    log('Video call webcam started');
+    await startVideoCallCamera(videoCallFacingMode);
   } catch (err) {
     log(`Webcam error: ${err.message}`);
     document.getElementById('videoCallWebcamStatus').textContent = '❌ Camera Error';
@@ -1012,6 +1006,43 @@ function toggleVideoCallMute() {
   }
 }
 
+async function startVideoCallCamera(facingMode = videoCallFacingMode) {
+  const video = document.getElementById('videoCallWebcam');
+  const status = document.getElementById('videoCallWebcamStatus');
+  const cameraBtn = document.getElementById('videoCallCameraBtn');
+
+  const nextStream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: { ideal: facingMode },
+      width: { ideal: 640 },
+      height: { ideal: 480 }
+    },
+    audio: false
+  });
+
+  if (videoCallStream) {
+    videoCallStream.getTracks().forEach(t => t.stop());
+  }
+
+  videoCallStream = nextStream;
+  videoCallFacingMode = facingMode;
+  videoCallCameraOn = true;
+
+  if (video) {
+    video.srcObject = videoCallStream;
+    await video.play();
+  }
+  if (cameraBtn) {
+    cameraBtn.classList.remove('off');
+    cameraBtn.textContent = '📷';
+  }
+  if (status) {
+    status.textContent = facingMode === 'environment' ? '📹 Back Camera' : '📹 Front Camera';
+  }
+
+  log(`Video call webcam started (${facingMode})`);
+}
+
 function toggleVideoCallCamera() {
   videoCallCameraOn = !videoCallCameraOn;
   const btn = document.getElementById('videoCallCameraBtn');
@@ -1031,6 +1062,29 @@ function toggleVideoCallCamera() {
     status.textContent = '📷 Camera Off';
     if (videoCallStream) {
       videoCallStream.getVideoTracks().forEach(t => t.enabled = false);
+    }
+  }
+}
+
+async function flipVideoCallCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    log('Camera flip unavailable: getUserMedia not supported');
+    return;
+  }
+
+  const nextFacingMode = videoCallFacingMode === 'user' ? 'environment' : 'user';
+  const status = document.getElementById('videoCallWebcamStatus');
+
+  try {
+    if (status) status.textContent = '🔄 Switching camera...';
+    await startVideoCallCamera(nextFacingMode);
+    log(`Switched video camera to ${nextFacingMode}`);
+  } catch (err) {
+    log(`Camera flip failed: ${err.message}`);
+    if (status) {
+      status.textContent = videoCallCameraOn
+        ? (videoCallFacingMode === 'environment' ? '📹 Back Camera' : '📹 Front Camera')
+        : '📷 Camera Off';
     }
   }
 }
