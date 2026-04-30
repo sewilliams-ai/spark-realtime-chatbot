@@ -7,6 +7,15 @@
 No output. Command exited successfully.
 ```
 
+**Feature: Recommend actual visible menu items**
+**Test #1: Prompt syntax validation**
+**Status:** PASS
+**Code Command**: `python -m py_compile prompts.py`
+**Result**:
+```bash
+No output. Command exited successfully.
+```
+
 **Feature: Menu-grounded private recommendation prompt**
 **Test #1: Prompt syntax validation**
 **Status:** PASS
