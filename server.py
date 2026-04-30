@@ -710,7 +710,7 @@ class VoiceSession:
                             is_agent_tool = False
                             for tc in tool_calls:
                                 func = tc.get("function", {})
-                                if func.get("name") in ["markdown_assistant", "reasoning_assistant"]:
+                                if func.get("name") in ["markdown_assistant", "reasoning_assistant", "workspace_update_assistant"]:
                                     is_agent_tool = True
                                     break
                             
@@ -719,6 +719,9 @@ class VoiceSession:
                                 for tc in tool_calls:
                                     if tc.get("function", {}).get("name") == "reasoning_assistant":
                                         feedback_msg = "Let me think through this..."
+                                        break
+                                    if tc.get("function", {}).get("name") == "workspace_update_assistant":
+                                        feedback_msg = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
                                         break
                                 else:
                                     feedback_msg = "On it."
@@ -810,6 +813,7 @@ class VoiceSession:
                             agent_task = None
                             agent_context = ""
                             agent_output_path = ""
+                            agent_items = []
                             for tool_result in tool_results:
                                 try:
                                     result_data = json.loads(tool_result.get("content", "{}"))
@@ -819,6 +823,7 @@ class VoiceSession:
                                         agent_task = result_data.get("task", "")
                                         agent_context = result_data.get("context", "")
                                         agent_output_path = result_data.get("output_path", "")
+                                        agent_items = result_data.get("items", [])
                                         break
                                 except json.JSONDecodeError:
                                     pass
@@ -956,6 +961,14 @@ CRITICAL INSTRUCTIONS:
                                     return
                                 else:
                                     print(f"[Voice Session] No problem found for reasoning agent")
+
+                            elif is_agent_tool and agent_type == "workspace_update_assistant":
+                                await self.execute_workspace_update_agent(
+                                    agent_task or "Add handwritten todos to the project",
+                                    agent_context,
+                                    agent_items if isinstance(agent_items, list) else []
+                                )
+                                return
                             
                             # Process and send the final response from tool execution (for non-agent tools or fallback)
                             if tool_final_response and tool_final_response.strip():
@@ -1103,6 +1116,189 @@ CRITICAL INSTRUCTIONS:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("", encoding="utf-8")
         return path, str(path.relative_to(WORKSPACE_ROOT))
+
+    def extract_workspace_todos(self, task: str, context: str = "", items: list = None) -> List[str]:
+        """Extract todo items from tool arguments, visible-note context, or Beat 4 fallback."""
+        import re
+
+        raw_items = [str(item).strip() for item in (items or []) if str(item).strip()]
+        source = "\n".join([task or "", context or ""])
+
+        if not raw_items:
+            cleaned_source = re.sub(
+                r"(?i)(visible handwritten note|handwritten note|todo list|todos?|items?|the note says|the note lists|context|task)\s*[:\-]?",
+                "\n",
+                source,
+            )
+            for part in re.split(r"[\n;,]+", cleaned_source):
+                item = re.sub(r"^\s*(?:[-*•]|\d+[.)]|\[\s?\])\s*", "", part).strip()
+                item = item.strip(" .")
+                if not item:
+                    continue
+                if item.lower() in {"add these to the project", "add these", "project", "personal"}:
+                    continue
+                if len(item.split()) > 8:
+                    continue
+                raw_items.append(item)
+
+        known_items = [
+            "add streaming updates",
+            "Redis pub/sub",
+            "write events table",
+            "React hook",
+            "test reconnect",
+            "buy umbrella",
+        ]
+        source_lower = source.lower()
+        for known in known_items:
+            if known.lower() in source_lower and known not in raw_items:
+                raw_items.append(known)
+
+        if not raw_items and "add these" in source_lower and "project" in source_lower:
+            raw_items = known_items
+
+        normalized = []
+        seen = set()
+        for item in raw_items:
+            item = self.normalize_workspace_todo(item)
+            key = item.lower()
+            if item and key not in seen:
+                normalized.append(item)
+                seen.add(key)
+        return normalized
+
+    def normalize_workspace_todo(self, item: str) -> str:
+        """Normalize common Beat 4 todo wording into clean task labels."""
+        item_clean = " ".join((item or "").strip().split())
+        lower = item_clean.lower()
+        mappings = {
+            "add streaming updates": "Add streaming updates",
+            "streaming updates": "Add streaming updates",
+            "redis pub/sub": "Add Redis pub/sub",
+            "redis pub sub": "Add Redis pub/sub",
+            "write events table": "Write events table",
+            "events table": "Write events table",
+            "react hook": "Build React hook",
+            "test reconnect": "Test reconnect",
+            "buy umbrella": "Buy umbrella",
+        }
+        if lower in mappings:
+            return mappings[lower]
+        return item_clean[:1].upper() + item_clean[1:]
+
+    def split_workspace_todos(self, todos: List[str]) -> tuple[List[str], List[str]]:
+        """Split project tasks from personal todos."""
+        personal_keywords = {"umbrella", "buy ", "groceries", "personal", "errand"}
+        project_tasks = []
+        personal_tasks = []
+        for todo in todos:
+            lower = todo.lower()
+            if any(keyword in lower for keyword in personal_keywords):
+                personal_tasks.append(todo)
+            else:
+                project_tasks.append(todo)
+        return project_tasks, personal_tasks
+
+    def upsert_markdown_section(self, path: Path, title: str, body: str, marker: str) -> None:
+        """Create or replace a marked section in a markdown file."""
+        start = f"<!-- {marker}:start -->"
+        end = f"<!-- {marker}:end -->"
+        section = f"{start}\n## {title}\n\n{body.rstrip()}\n{end}\n"
+
+        if path.exists():
+            content = path.read_text(encoding="utf-8")
+        else:
+            heading = path.stem.replace("_", " ").replace("-", " ").title()
+            content = f"# {heading}\n"
+
+        if start in content and end in content:
+            before, rest = content.split(start, 1)
+            _, after = rest.split(end, 1)
+            updated = before.rstrip() + "\n\n" + section + after.lstrip("\n")
+        else:
+            updated = content.rstrip() + "\n\n" + section
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+
+    def apply_workspace_todo_updates(self, todos: List[str]) -> Dict[str, Any]:
+        """Route Beat 4 todos into project and personal workspace files."""
+        project_tasks, personal_tasks = self.split_workspace_todos(todos)
+        files = {}
+
+        task_path = self.resolve_workspace_markdown_path("project_dashboard/tasks.md", "project tasks")
+        task_lines = "\n".join(f"- [ ] {task}" for task in project_tasks) or "- [ ] Review project notes"
+        self.upsert_markdown_section(
+            task_path,
+            "Engineering Tasks From Handwritten Notes",
+            "These tasks came from the handwritten note captured during the phone demo.\n\n" + task_lines,
+            "spark-beat4-project-tasks",
+        )
+        files["project_tasks"] = str(task_path.relative_to(WORKSPACE_ROOT))
+
+        design_path = self.resolve_workspace_markdown_path("realtime_design.md", "realtime design")
+        design_body = "\n".join([
+            "Handwritten notes added these implementation details to the realtime dashboard design:",
+            "",
+            "- Streaming updates should be pushed live to connected React dashboards.",
+            "- Redis pub/sub fans events out across FastAPI instances.",
+            "- An events table in MySQL keeps durable history for reconnect and catch-up.",
+            "- A React hook should own subscription, state updates, and reconnect handling.",
+            "- Reconnect behavior needs an explicit test path.",
+        ])
+        self.upsert_markdown_section(
+            design_path,
+            "Handwritten Follow-Up",
+            design_body,
+            "spark-beat4-realtime-followup",
+        )
+        files["realtime_design"] = str(design_path.relative_to(WORKSPACE_ROOT))
+
+        personal_path = self.resolve_workspace_markdown_path("personal_todos.md", "personal todos")
+        personal_lines = "\n".join(f"- [ ] {task}" for task in personal_tasks) or "- [ ] Review personal notes"
+        self.upsert_markdown_section(
+            personal_path,
+            "Personal Todos",
+            personal_lines,
+            "spark-beat4-personal-todos",
+        )
+        files["personal_todos"] = str(personal_path.relative_to(WORKSPACE_ROOT))
+
+        return {
+            "files": files,
+            "project_tasks": project_tasks,
+            "personal_tasks": personal_tasks,
+        }
+
+    async def execute_workspace_update_agent(self, task: str, context: str = "", items: list = None):
+        """Route handwritten todos into the shared workspace files."""
+        try:
+            todos = self.extract_workspace_todos(task, context, items)
+            result = self.apply_workspace_todo_updates(todos)
+            files = result["files"]
+            summary = (
+                "Done. I updated the project tasks, realtime design, and personal todos."
+            )
+
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": (
+                    f"{summary} Files: {files['project_tasks']}, "
+                    f"{files['realtime_design']}, {files['personal_todos']}"
+                )
+            })
+            await self.send_message("workspace_update_complete", {
+                "summary": summary,
+                "files": files,
+                "project_tasks": result["project_tasks"],
+                "personal_tasks": result["personal_tasks"],
+            })
+            await self.stream_tts(summary)
+        except Exception as e:
+            print(f"[Voice Session] Workspace update agent error: {e}")
+            import traceback
+            traceback.print_exc()
+            await self.send_message("error", {"error": f"Workspace update error: {str(e)}"})
 
     async def execute_markdown_agent(self, task: str, context: str = "", output_path: str = ""):
         """Execute the markdown assistant agent and stream results."""
@@ -1745,7 +1941,11 @@ async def voice_call(websocket: WebSocket):
                                             print(f"[Video Call] Tool '{tool_name}' args: {args}")
 
                                             # Send acknowledgment
-                                            await session.stream_tts("On it.", is_transient=True)
+                                            if tool_name == "workspace_update_assistant":
+                                                ack = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
+                                            else:
+                                                ack = "On it."
+                                            await session.stream_tts(ack, is_transient=True)
 
                                             # Execute tool
                                             if tool_name == "markdown_assistant":
@@ -1761,6 +1961,12 @@ async def voice_call(websocket: WebSocket):
                                                     args.get("problem", ""),
                                                     args.get("context", ""),
                                                     args.get("analysis_type", "general")
+                                                )
+                                            elif tool_name == "workspace_update_assistant":
+                                                await session.execute_workspace_update_agent(
+                                                    args.get("task", "Add handwritten todos to the project"),
+                                                    args.get("context", ""),
+                                                    args.get("items", [])
                                                 )
                                     else:
                                         # Regular response - speak it

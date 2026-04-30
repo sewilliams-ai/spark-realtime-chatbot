@@ -2691,6 +2691,8 @@ async function handleMessage(data) {
       } else if (data.agent_type === "reasoning_assistant") {
         // Reasoning now uses inline display, not popup
         log("Reasoning uses inline display");
+      } else if (data.agent_type === "workspace_update_assistant") {
+        log("Workspace update assistant uses inline display");
       }
       break;
 
@@ -2788,6 +2790,23 @@ async function handleMessage(data) {
       scrollToBottom();
       saveCurrentChat();
       log(`Markdown assistant completed: ${data.task.substring(0, 50)}...`);
+      break;
+
+    case "workspace_update_complete":
+      // Workspace update assistant finished - add file summary
+      hideThinkingIndicator();
+      removeEmptyState();
+      const workspaceFiles = data.files || {};
+      const workspaceSummary = data.summary || "Workspace files updated.";
+      const fileList = Object.values(workspaceFiles).filter(Boolean).join("\n");
+      const workspaceMsg = createMessageElement(
+        "assistant",
+        fileList ? `${workspaceSummary}\n\n${fileList}` : workspaceSummary
+      );
+      getActiveConversationEl().appendChild(workspaceMsg.container);
+      scrollToBottom();
+      saveCurrentChat();
+      log(`Workspace update completed: ${fileList}`);
       break;
 
     case "reasoning_started":

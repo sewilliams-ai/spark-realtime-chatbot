@@ -33,6 +33,33 @@ ALL_TOOLS = {
         }
     },
 
+    "workspace_update_assistant": {
+        "type": "function",
+        "function": {
+            "name": "workspace_update_assistant",
+            "description": "Updates multiple files in the shared workspace/ scratch folder from handwritten notes or todos. Use this when the user says to add notes, todos, or action items to the project, especially when some items belong in project_dashboard/tasks.md, realtime_design.md, and personal_todos.md. Do not use markdown_assistant for multi-file todo routing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The workspace update request, e.g. 'Add these handwritten todos to the project'"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Visible handwritten notes or extracted todo items, plus any relevant project context"
+                    },
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional extracted todo items from the visible note"
+                    }
+                },
+                "required": ["task"]
+            }
+        }
+    },
+
     # Nemotron-powered reasoning agent
     "reasoning_assistant": {
         "type": "function",
@@ -96,6 +123,18 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             "problem": problem,
             "context": context,
             "analysis_type": analysis_type,
+            "status": "initiated"
+        })
+
+    elif tool_name == "workspace_update_assistant":
+        task = arguments.get("task", "")
+        context = arguments.get("context", "")
+        items = arguments.get("items", [])
+        return json.dumps({
+            "agent_type": "workspace_update_assistant",
+            "task": task,
+            "context": context,
+            "items": items if isinstance(items, list) else [],
             "status": "initiated"
         })
 
