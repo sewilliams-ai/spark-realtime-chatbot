@@ -7,6 +7,24 @@
 No output. Command exited successfully.
 ```
 
+**Feature: Rear camera preview is not mirrored**
+**Test #1: JavaScript syntax validation**
+**Status:** PASS
+**Code Command**: `node --check static/js/app.js`
+**Result**:
+```bash
+No output. Command exited successfully.
+```
+
+**Feature: Rear camera preview is not mirrored**
+**Test #2: Whitespace validation**
+**Status:** PASS
+**Code Command**: `git diff --check -- static/css/styles.css static/js/app.js`
+**Result**:
+```bash
+No output. Command exited successfully.
+```
+
 **Feature: Flip video-call camera on mobile**
 **Test #1: JavaScript syntax validation**
 **Status:** PASS

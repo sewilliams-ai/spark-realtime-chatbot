@@ -1522,7 +1522,10 @@
       height: 100%;
       object-fit: cover;
       display: block;
-      transform: scaleX(-1); /* Mirror */
+    }
+
+    .video-call-webcam video.mirrored {
+      transform: scaleX(-1);
     }
 
     .video-call-webcam-status {
@@ -1787,4 +1790,3 @@
     #agentReasoningConclusion table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
     #agentReasoningConclusion th, #agentReasoningConclusion td { border: 1px solid #dee2e6; padding: 0.5rem; text-align: left; }
     #agentReasoningConclusion thead { background: #f8f9fa; }
-  

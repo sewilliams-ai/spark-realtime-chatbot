@@ -1030,6 +1030,7 @@ async function startVideoCallCamera(facingMode = videoCallFacingMode) {
 
   if (video) {
     video.srcObject = videoCallStream;
+    video.classList.toggle('mirrored', facingMode === 'user');
     await video.play();
   }
   if (cameraBtn) {
