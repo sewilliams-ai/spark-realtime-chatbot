@@ -142,8 +142,9 @@ All defaults live in `config.py` and can be overridden via environment variables
 
 ### WHOOP local cache
 
-WHOOP data is optional. Without credentials, the committed `whoop:` subtree in
-`demo_files/health.yaml` is the demo source of truth.
+WHOOP data is optional. The committed `demo_files/health.yaml` is initialized
+with dummy demo/testing values; without credentials, its committed `whoop:`
+subtree is the demo source of truth.
 The hand-edited `meals:` entries use relative timing such as `when: yesterday`
 or `when: 2 days ago`, so the demo does not go stale across recording days.
 

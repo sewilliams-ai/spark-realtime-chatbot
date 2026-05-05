@@ -1,3 +1,8 @@
+# DUMMY DATA FOR DEMO/TESTING ONLY.
+# The committed values are fake local health context for the Beat 3 demo.
+# A local WHOOP refresh may replace only the `whoop:` subtree with real data.
+# Do not commit refreshed WHOOP values or demo_files/whoop_auth.json.
+
 # Fake-but-realistic local data for the Beat 3 health demo.
 # This file is the single source of truth for private health context.
 # WHOOP refresh (clients/whoop.py --refresh) overwrites only the `whoop:`

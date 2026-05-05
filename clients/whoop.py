@@ -35,6 +35,12 @@ DEFAULT_SCOPES = (
     "read:workout",
     "offline",
 )
+HEALTH_YAML_HEADER = """# DUMMY DATA FOR DEMO/TESTING ONLY.
+# The committed values are fake local health context for the Beat 3 demo.
+# A local WHOOP refresh may replace only the `whoop:` subtree with real data.
+# Do not commit refreshed WHOOP values or demo_files/whoop_auth.json.
+
+"""
 
 
 @dataclass(frozen=True)
@@ -226,7 +232,8 @@ def write_to_health_yaml(whoop_data: dict[str, Any], path: Path | None = None) -
     data["whoop"] = whoop_data
 
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    body = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+    tmp_path.write_text(HEALTH_YAML_HEADER + body, encoding="utf-8")
     tmp_path.replace(path)
     return path
 
