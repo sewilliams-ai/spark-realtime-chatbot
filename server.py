@@ -1700,16 +1700,22 @@ Output the complete HTML code."""
         
         context_parts = []
         context_parts.append("=== LOCAL DATA FILES ===\n")
-        
+
+        sensitive_names = {"health.yaml", "whoop_auth.json"}
         for file_path in sorted(demo_dir.iterdir()):
-            if file_path.is_file() and file_path.suffix in ['.csv', '.txt', '.md']:
-                try:
-                    content = file_path.read_text()
-                    context_parts.append(f"[{file_path.name}]")
-                    context_parts.append(content)
-                    context_parts.append("")  # Empty line between files
-                except Exception as e:
-                    print(f"[Demo Files] Error reading {file_path}: {e}")
+            if file_path.is_dir():
+                continue
+            if file_path.name in sensitive_names:
+                continue
+            if file_path.suffix not in ['.csv', '.txt', '.md']:
+                continue
+            try:
+                content = file_path.read_text()
+                context_parts.append(f"[{file_path.name}]")
+                context_parts.append(content)
+                context_parts.append("")  # Empty line between files
+            except Exception as e:
+                print(f"[Demo Files] Error reading {file_path}: {e}")
         
         if len(context_parts) > 1:  # More than just the header
             return "\n".join(context_parts)

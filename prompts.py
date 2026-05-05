@@ -21,6 +21,7 @@ Env vars:
 """
 
 import os as _os
+from datetime import date as _date
 from pathlib import Path as _Path
 
 
@@ -98,6 +99,186 @@ def _load_claw_persona() -> str:
         "projects?', preferences, etc., directly — without calling any tool.\n"
         + "".join(chunks)
     )
+
+
+# ----- Private health context injection ------------------------------------
+# Keep this separate from Claw persona injection so the privacy boundary is
+# auditable: this loader reads only the demo health YAML and returns a
+# speech-safe summary.
+
+_DEFAULT_HEALTH_YAML = _Path(__file__).parent / "demo_files" / "health.yaml"
+
+
+def _health_yaml_path() -> _Path:
+    return _Path(_os.environ.get("HEALTH_YAML_PATH", str(_DEFAULT_HEALTH_YAML)))
+
+
+def _as_number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _health_context_meal_label(meal_date, today: _date) -> str:
+    if not meal_date:
+        return "recent"
+    try:
+        parsed = _date.fromisoformat(str(meal_date))
+    except ValueError:
+        return "recent"
+    days_ago = (today - parsed).days
+    if days_ago == 1:
+        return "yesterday's"
+    if days_ago == 0:
+        return "today's"
+    return "recent"
+
+
+def _meal_phrase(meal: dict, today: _date) -> str:
+    when = _health_context_meal_label(meal.get("date"), today)
+    slot = str(meal.get("meal") or "meal")
+    description = str(meal.get("description") or "a meal").strip()
+    tags = set(meal.get("tags") or [])
+    descriptors = []
+    if "heavy_sodium" in tags or "moderate_sodium" in tags:
+        descriptors.append("salty")
+    if "rich_broth" in tags:
+        descriptors.append("rich")
+    if "fried" in tags:
+        descriptors.append("fried")
+    if "refined_carbs" in tags:
+        descriptors.append("carb-heavy")
+    prefix = ", ".join(descriptors)
+    if prefix:
+        return f"{when} {slot} was a {prefix} {description}"
+    return f"{when} {slot} was {description}"
+
+
+def _private_lab_summary(bloodwork: dict) -> str:
+    if not isinstance(bloodwork, dict) or not bloodwork:
+        return "Private lab trend data unavailable."
+
+    flags = []
+    avg = bloodwork.get("blood_pressure_avg_7d") or {}
+    systolic = _as_number(avg.get("systolic"))
+    diastolic = _as_number(avg.get("diastolic"))
+    if (systolic is not None and systolic >= 130) or (diastolic is not None and diastolic >= 80):
+        flags.append("cardiovascular load elevated")
+
+    lipids = bloodwork.get("lipid_panel") or {}
+    ldl = _as_number(lipids.get("ldl_mg_dl"))
+    triglycerides = _as_number(lipids.get("triglycerides_mg_dl"))
+    if (ldl is not None and ldl >= 130) or (triglycerides is not None and triglycerides >= 150):
+        flags.append("fat-processing marker high")
+
+    metabolic = bloodwork.get("metabolic") or {}
+    fasting = _as_number(metabolic.get("fasting_glucose_mg_dl"))
+    hba1c = _as_number(metabolic.get("hba1c_percent"))
+    if (fasting is not None and fasting >= 100) or (hba1c is not None and hba1c >= 5.7):
+        flags.append("energy marker borderline")
+
+    if not flags:
+        return "Private lab trends do not add a strong food constraint today."
+    return "Private lab trends: " + ", ".join(flags) + "."
+
+
+def _whoop_summary(whoop: dict) -> str:
+    if not isinstance(whoop, dict) or not whoop:
+        return "WHOOP data unavailable."
+
+    parts = []
+    recovery = _as_number((whoop.get("recovery") or {}).get("recovery_score"))
+    if recovery is None:
+        parts.append("recovery unavailable")
+    elif recovery <= 50:
+        parts.append("recovery low")
+    elif recovery <= 70:
+        parts.append("recovery moderate")
+    else:
+        parts.append("recovery high")
+
+    sleep = _as_number((whoop.get("sleep") or {}).get("sleep_performance_percentage"))
+    if sleep is None:
+        parts.append("sleep unavailable")
+    elif sleep < 80:
+        parts.append("sleep below target")
+    else:
+        parts.append("sleep on target")
+
+    strain = _as_number((whoop.get("cycle") or {}).get("strain"))
+    if strain is None:
+        parts.append("day strain unavailable")
+    elif strain >= 14:
+        parts.append("day strain high")
+    elif strain >= 10:
+        parts.append("day strain moderate")
+    else:
+        parts.append("day strain low")
+
+    return "WHOOP yesterday: " + ", ".join(parts) + "."
+
+
+def _load_health_context() -> str:
+    """Read demo health data and return a speech-safe system-prompt addendum."""
+    path = _health_yaml_path()
+    if not path.exists():
+        return ""
+    try:
+        import yaml as _yaml
+
+        data = _yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return ""
+
+    if not isinstance(data, dict):
+        return ""
+
+    condition = data.get("condition") or {}
+    has_medication = bool(isinstance(condition, dict) and condition.get("medication"))
+    if condition:
+        condition_line = "The user has a flagged cardiovascular concern"
+        if has_medication:
+            condition_line += " and is medication-managed"
+        condition_line += ". Treat sodium and saturated fat as something to minimize today."
+    else:
+        condition_line = "Private condition summary unavailable. Keep recommendations conservative and food-focused."
+
+    lab_line = _private_lab_summary(data.get("bloodwork") or {})
+    whoop_line = _whoop_summary(data.get("whoop") or {})
+
+    meals = data.get("meals") or []
+    if isinstance(meals, list) and meals:
+        meal_phrases = [
+            _meal_phrase(meal, _date.today())
+            for meal in meals[:2]
+            if isinstance(meal, dict)
+        ]
+        meals_line = "Recent meals: " + "; ".join(meal_phrases) + "."
+        pattern_line = "The user has had heavy or salty meals recently."
+    else:
+        meals_line = "Recent meals data unavailable."
+        pattern_line = "Use neutral food-language guidance."
+
+    return f"""
+
+HEALTH CONTEXT (PRIVATE - do not name aloud):
+- {condition_line}
+- {lab_line} Use these only to inform recommendations; do not recite values or medical category names aloud unless the user explicitly asks for the private details.
+- {whoop_line}
+- {meals_line} {pattern_line}
+
+RECOMMENDATION STYLE (food-language only):
+- Recommend a single visible or translated dish and a single visible dish to avoid.
+- Reason in food terms such as salty, fried, rich, lighter, lower-sodium, or less fried.
+- Tie to meal pattern only when helpful, such as after yesterday's ramen, not to the private health signal.
+- Use one or two short spoken sentences.
+
+DISCLOSURE RULES:
+- If asked why, follow up with food-language reasons first.
+- If pressed about what private health data you know, mention only the broad category quietly.
+- Give specific values only when the user directly asks for the numbers or the data.
+"""
 
 # -----------------------------
 # Default Text Chat System Prompt
@@ -209,17 +390,18 @@ If the question is about what you SEE (architecture, diagrams, code), answer it 
 
 For the demo architecture React Dashboard -> FastAPI -> MySQL, if the user asks what you would improve, answer briefly and directly: "Polling MySQL for dashboard updates won't scale. I'd keep MySQL as the source of truth, but add Redis pub/sub between FastAPI instances for realtime fanout. I can sketch that design." If the user agrees, use markdown_assistant to create "realtime_design.md".
 
-LOCAL PRIVATE DEMO MEMORY:
-- The user's fitness goals are to gain strength, eat healthy and clean, and build strength for their first half marathon.
-- Yesterday the user ate ramen.
-- If the user asks what to order from a menu based on what you remember about their health preferences or recent meals, silently read and translate the visible menu items into English dish names before answering. Do not narrate what you can read unless the user asks. Base the recommendation only on items you can actually see, translate, or confidently infer from the menu. Never say placeholder phrases like "Chinese letter", "Chinese characters", or raw unread text aloud. If you cannot translate an item, say the menu text is unclear and ask them to move closer or hold still.
-- Prefer lighter, cleaner, higher-protein options when available, and steer away from another heavy salty noodle soup after yesterday's ramen.
-- For the Taiwanese menu demo, recommend actual visible translated menu items by English name without a reading preamble. A good style is: "I recommend [specific visible item] over [specific visible item] because [the skipped item] is heavier in salt, carbs, sugar, or fried oil." Tie the reason to the user's goals and yesterday's ramen in one concise sentence.
+PRIVATE HEALTH-AWARE BEHAVIOR:
+- This Spark holds the user's private health context: condition, recent bloodwork, recent meals, WHOOP recovery and strain. The server appends a HEALTH CONTEXT block to this prompt every turn. Use it for any health-shaped question, including menu picks, workout timing, sleep timing, or "should I" questions.
+- Default privacy rule: NEVER speak diagnosis names, medication names, or raw numeric values aloud. Use food-language reasons only, such as "salty", "fried", "lighter today", and meal-history reasons like "after yesterday's ramen". Treat the demo as a public or social setting.
+- For Chinese-only or other foreign-language menus: silently OCR and translate visible items to English first. Do not narrate the translation. If you cannot read an item, say the menu text is unclear and ask the user to move closer.
+- When asked what to order, recommend exactly one visible or translated dish and one visible dish to skip, in one or two short spoken sentences. The recommended dish must appear in the visible menu. Do not invent dishes.
+- Good wording: "I'd go with [visible dish] over [visible dish] because the skipped one is [food-language reason]."
+- Disclosure ladder: if the user asks "why?" stay in food language. If they press with questions like "what do you know about my health?", "what are my numbers?", or "tell me the data", then it is appropriate to mention the underlying category and, on explicit request, specifics quietly in one sentence.
 
 IMPORTANT FOR TOOL CALLS:
 When using tools, include a description of what you see in the "context" parameter (if there's relevant visual content). If there's no relevant image, leave context empty - the reasoning tool has its own data files.
 
-Be a helpful friend on a video call, not a surveillance camera.""" + _load_claw_persona() + _maybe_demo_suffix()
+Be a helpful friend on a video call, not a surveillance camera.""" + _load_claw_persona() + _load_health_context() + _maybe_demo_suffix()
 
 
 # -----------------------------
