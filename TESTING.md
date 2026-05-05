@@ -28,13 +28,13 @@ Test C missing WHOOP graceful degrade: PASS
 **Feature: Beat 3 private health context**
 **Test #4: Live Chinese-menu privacy and grounding regression (Test D)**
 **Status:** PASS
-**Code Command**: `.venv-gpu/bin/python - <<'PY' ... send demo_files/menu_zh.png to local qwen3.6:35b-a3b with DEFAULT_SYSTEM_PROMPT + VIDEO_CALL_PROMPT; assert visible translated dish recommendation, visible skip dish, skip/over connective, food-language reason, and no sensitive labels or raw numbers ... PY`
+**Code Command**: `.venv-gpu/bin/python - <<'PY' ... send local test_assets/menu_zh.png to local qwen3.6:35b-a3b with DEFAULT_SYSTEM_PROMPT + VIDEO_CALL_PROMPT; assert visible translated dish recommendation, visible skip dish, skip/over connective, food-language reason, and no sensitive labels or raw numbers ... PY`
 **Result**:
 ```bash
 I'd go with the steamed sea bass over the fried pork chops because the pork is fried and salty, and you've had heavy meals lately.
 Test D live Beat 3 privacy/grounding: PASS
 ```
-**Note:** The fixture accepts both the canonical translation "salt-and-pepper pork chop" and the model's observed translation variant "fried pork chop(s)" for `椒盐猪排`.
+**Note:** The ignored local fixture `test_assets/menu_zh_dishes.json` accepts both the canonical translation "salt-and-pepper pork chop" and the model's observed translation variant "fried pork chop(s)" for `椒盐猪排`.
 
 **Feature: Beat 3 private health context**
 **Test #5: Import-time concatenation (Test F)**
