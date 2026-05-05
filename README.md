@@ -136,6 +136,40 @@ All defaults live in `config.py` and can be overridden via environment variables
 | `TTS_ENGINE` | `kokoro` | `kokoro` (default) or `chatterbox` (experimental; see bench above) |
 | `TTS_DEVICE` | `cuda` | `cuda` or `cpu`. Kokoro CUDA requires torch cu130 wheels on GB10. |
 | `TTS_OVERLAP` | `false` | Start TTS while LLM still streaming |
+| `WHOOP_CLIENT_ID` / `WHOOP_CLIENT_SECRET` | unset | Enables the local WHOOP OAuth routes when both are set |
+| `WHOOP_REDIRECT_URI` | `https://localhost:8443/whoop/callback` | Must exactly match a Redirect URI in the WHOOP Developer Dashboard |
+| `WHOOP_API_BASE_URL` | `https://api.prod.whoop.com/developer` | WHOOP v2 API base used by `clients.whoop` |
+
+### WHOOP local cache
+
+WHOOP data is optional. Without credentials, the committed `whoop:` subtree in
+`demo_files/health.yaml` is the demo source of truth.
+
+For live data, create a WHOOP app with this redirect URI:
+
+```text
+https://localhost:8443/whoop/callback
+```
+
+Use these scopes: `read:recovery`, `read:sleep`, `read:cycles`,
+`read:workout`, and `offline`. Webhooks are not needed for the local Spark
+demo.
+
+Then launch the app from a shell with:
+
+```bash
+export WHOOP_CLIENT_ID=...
+export WHOOP_CLIENT_SECRET=...
+export WHOOP_REDIRECT_URI=https://localhost:8443/whoop/callback
+```
+
+Open `https://localhost:8443/whoop/login`, complete consent, and restart the
+server so `prompts.py` reloads the refreshed `demo_files/health.yaml`. To
+refresh later from cron or a terminal:
+
+```bash
+python -m clients.whoop --refresh
+```
 
 ---
 

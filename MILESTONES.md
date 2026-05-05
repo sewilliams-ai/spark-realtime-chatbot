@@ -26,12 +26,13 @@ Add WHOOP data integration so the assistant can use private recovery, sleep, str
 - `prompts._load_health_context()` reads that YAML at import time, converts numeric health and WHOOP values into qualitative labels, and appends a speech-safe private block to `VIDEO_CALL_PROMPT`.
 - Beat 3 menu guidance now uses visible translated dishes plus food-language reasons by default; diagnosis names, medication names, sensitive category words, and raw numbers stay out of the default spoken path.
 - `VoiceSession.load_demo_files()` explicitly skips `health.yaml` and `whoop_auth.json`, so private health data does not leak into the customer-feedback reasoning context.
-- Live WHOOP OAuth was skipped because `WHOOP_CLIENT_ID` and `WHOOP_CLIENT_SECRET` were unset. No `demo_files/whoop_auth.json` was created; the committed stub `whoop:` subtree remains the source of truth.
+- Live WHOOP OAuth is implemented behind `WHOOP_CLIENT_ID` / `WHOOP_CLIENT_SECRET`: `clients/whoop.py` handles auth URLs, token exchange, refresh, endpoint fetches, token storage, and replacement of only the `whoop:` subtree in `demo_files/health.yaml`. The committed stub remains the fallback when credentials are absent.
 
 ### Implementation Commits
 
 - `6266481 [feat] add fake local health data for Beat 3`
 - `b5aa9d8 [feat] inject always-on private health context into VLM prompt`
+- `[feat] add WHOOP OAuth flow with local cache and stub fallback`
 
 ### Test Status
 
@@ -42,8 +43,10 @@ All requested tests for the stubbed demo path passed.
 - Test C missing WHOOP subtree graceful degrade: **PASS**.
 - Test D live Chinese-menu privacy and grounding regression: **PASS** against local `qwen3.6:35b-a3b`.
 - Test F import-time concatenation: **PASS**.
-- WHOOP credential gate: **PASS** (`WHOOP_CLIENT_ID` / `WHOOP_CLIENT_SECRET` unset, Phase 3 skipped).
-- Test G real WHOOP OAuth: **Not run** because credentials were absent.
+- WHOOP auth URL configuration: **PASS**.
+- WHOOP YAML cache and auth token writers: **PASS**.
+- WHOOP FastAPI route registration: **PASS**.
+- Test G real WHOOP OAuth: **Not run**; browser consent is pending.
 
 ## 2026-04-30 - Claw Demo Integration And GPU Runtime
 

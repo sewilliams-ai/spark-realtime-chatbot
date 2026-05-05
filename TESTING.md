@@ -47,14 +47,51 @@ Test F import-time concatenation: PASS
 
 **Feature: Beat 3 private health context**
 **Test #6: WHOOP OAuth credential gate**
-**Status:** PASS
+**Status:** PASS (superseded by Phase 3 implementation smoke tests below)
 **Code Command**: `.venv-gpu/bin/python - <<'PY' ... print whether WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET are set ... PY`
 **Result**:
 ```bash
 WHOOP_CLIENT_ID=unset
 WHOOP_CLIENT_SECRET=unset
 ```
-**Note:** Phase 3 was skipped by policy because credentials were absent. Test G was not run.
+**Note:** Phase 3 was originally skipped by policy because credentials were absent. It was reopened after credentials were added.
+
+**Feature: WHOOP OAuth local cache**
+**Test #1: Auth URL configuration**
+**Status:** PASS
+**Code Command**: `source ~/.bashrc && .venv-gpu/bin/python - <<'PY' ... assert WhoopConfig is enabled, redirect URI is https://localhost:8443/whoop/callback, auth URL uses response_type=code, state, and least-privilege scopes ... PY`
+**Result**:
+```bash
+whoop auth_url config: PASS
+```
+
+**Feature: WHOOP OAuth local cache**
+**Test #2: YAML cache and auth token writers**
+**Status:** PASS
+**Code Command**: `source ~/.bashrc && .venv-gpu/bin/python - <<'PY' ... normalize fixture WHOOP payloads, replace only whoop: in a temp health.yaml, write temp auth tokens, assert token mode 600 ... PY`
+**Result**:
+```bash
+whoop yaml/token writers: PASS
+```
+
+**Feature: WHOOP OAuth local cache**
+**Test #3: FastAPI route registration**
+**Status:** PASS
+**Code Command**: `source ~/.bashrc && .venv-gpu/bin/python - <<'PY' ... import server.app and assert /whoop/login and /whoop/callback are registered ... PY`
+**Result**:
+```bash
+whoop routes registered: PASS
+```
+
+**Feature: WHOOP OAuth local cache**
+**Test #4: Real WHOOP OAuth browser flow (Test G)**
+**Status:** NOT RUN
+**Code Command**: `Open https://localhost:8443/whoop/login in a browser after launching the app with WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET, and WHOOP_REDIRECT_URI.`
+**Result**:
+```bash
+Manual consent flow pending.
+```
+**Note:** The non-interactive implementation checks pass. The final WHOOP consent step requires a browser login and cannot be completed by the test harness without user interaction.
 
 **Feature: Live prompt regression against local Qwen3.6**
 **Test #1: Demo beats prompt and tool-call behavior**

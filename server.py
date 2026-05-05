@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import json
 import os
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
@@ -153,6 +154,54 @@ async def get_default_prompt():
     """Get the default system prompt from prompts.py."""
     from prompts import DEFAULT_SYSTEM_PROMPT
     return {"prompt": DEFAULT_SYSTEM_PROMPT}
+
+
+_WHOOP_OAUTH_STATES: set[str] = set()
+
+if os.environ.get("WHOOP_CLIENT_ID") and os.environ.get("WHOOP_CLIENT_SECRET"):
+    from clients.whoop import auth_url as whoop_auth_url
+    from clients.whoop import exchange_code as whoop_exchange_code
+    from clients.whoop import fetch_all as whoop_fetch_all
+    from clients.whoop import write_auth_tokens as whoop_write_auth_tokens
+    from clients.whoop import write_to_health_yaml as whoop_write_to_health_yaml
+
+    @app.get("/whoop/login")
+    async def whoop_login():
+        """Start WHOOP OAuth for the local demo cache."""
+        state = secrets.token_hex(4)
+        _WHOOP_OAUTH_STATES.add(state)
+        return RedirectResponse(whoop_auth_url(state), status_code=302)
+
+    @app.get("/whoop/callback", response_class=HTMLResponse)
+    async def whoop_callback(request: Request):
+        """Complete WHOOP OAuth and refresh the local health YAML cache."""
+        error = request.query_params.get("error")
+        if error:
+            return HTMLResponse(f"<h1>WHOOP authorization failed</h1><p>{error}</p>", status_code=400)
+
+        state = request.query_params.get("state", "")
+        if state not in _WHOOP_OAUTH_STATES:
+            return HTMLResponse("<h1>WHOOP authorization failed</h1><p>Invalid OAuth state.</p>", status_code=400)
+        _WHOOP_OAUTH_STATES.discard(state)
+
+        code = request.query_params.get("code")
+        if not code:
+            return HTMLResponse("<h1>WHOOP authorization failed</h1><p>Missing authorization code.</p>", status_code=400)
+
+        try:
+            tokens = await whoop_exchange_code(code)
+            token_path = whoop_write_auth_tokens(tokens)
+            whoop_data = await whoop_fetch_all(tokens.get("access_token"))
+            health_path = whoop_write_to_health_yaml(whoop_data)
+        except Exception as exc:
+            print(f"[WHOOP] OAuth callback failed: {exc}")
+            return HTMLResponse("<h1>WHOOP connection failed</h1><p>Check server logs for details.</p>", status_code=500)
+
+        return HTMLResponse(
+            "<h1>WHOOP connected</h1>"
+            f"<p>Tokens stored locally at {token_path.name} with mode 600.</p>"
+            f"<p>Updated local health cache: {health_path.name}. Restart the server to reload prompt context.</p>"
+        )
 
 
 # -----------------------------
