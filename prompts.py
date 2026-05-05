@@ -120,6 +120,35 @@ def _as_number(value):
         return None
 
 
+_RELATIVE_WORDS = {
+    "0": "zero",
+    "1": "one",
+    "2": "two",
+    "3": "three",
+    "4": "four",
+    "5": "five",
+    "6": "six",
+    "7": "seven",
+}
+
+
+def _health_context_relative_label(value) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip().lower().replace("_", " ").replace("-", " ")
+    text = " ".join(text.split())
+    if text in ("today", "today's"):
+        return "today's"
+    if text in ("yesterday", "yesterday's", "1 day ago", "one day ago"):
+        return "yesterday's"
+    if text in ("recent", "recently"):
+        return "recent"
+    for digit, word in _RELATIVE_WORDS.items():
+        text = text.replace(f"{digit} days ago", f"{word} days ago")
+        text = text.replace(f"{digit} day ago", f"{word} day ago")
+    return text
+
+
 def _health_context_meal_label(meal_date, today: _date) -> str:
     if not meal_date:
         return "recent"
@@ -136,7 +165,10 @@ def _health_context_meal_label(meal_date, today: _date) -> str:
 
 
 def _meal_phrase(meal: dict, today: _date) -> str:
-    when = _health_context_meal_label(meal.get("date"), today)
+    when = (
+        _health_context_relative_label(meal.get("when") or meal.get("relative_date"))
+        or _health_context_meal_label(meal.get("date"), today)
+    )
     slot = str(meal.get("meal") or "meal")
     description = str(meal.get("description") or "a meal").strip()
     tags = set(meal.get("tags") or [])

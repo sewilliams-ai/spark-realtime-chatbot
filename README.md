@@ -144,6 +144,8 @@ All defaults live in `config.py` and can be overridden via environment variables
 
 WHOOP data is optional. Without credentials, the committed `whoop:` subtree in
 `demo_files/health.yaml` is the demo source of truth.
+The hand-edited `meals:` entries use relative timing such as `when: yesterday`
+or `when: 2 days ago`, so the demo does not go stale across recording days.
 
 For live data, create a WHOOP app with this redirect URI:
 

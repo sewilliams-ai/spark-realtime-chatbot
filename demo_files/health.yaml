@@ -30,15 +30,15 @@ bloodwork:
   notes: Borderline metabolic syndrome markers; sodium-sensitive.
 
 meals:
-  - date: 2026-05-04
+  - when: yesterday
     meal: lunch
     description: tonkotsu ramen with chashu and a soft-boiled egg
     tags: [heavy_sodium, rich_broth, refined_carbs]
-  - date: 2026-05-04
+  - when: yesterday
     meal: dinner
     description: leftover fried rice
     tags: [heavy_sodium, fried]
-  - date: 2026-05-03
+  - when: 2 days ago
     meal: lunch
     description: chicken Caesar salad
     tags: [moderate_sodium]
