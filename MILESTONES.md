@@ -1,8 +1,12 @@
 # Milestones
 
+## Future
+
+- Add a dev-mode launch script that handles CTranslate2 source compilation for DGX Spark/GB10, including environment creation, activation, dependency installation, and launching through `launch-https.sh`.
+
 ## 2026-04-30 - WHOOP Integration
 
-**Status:** In Progress
+**Status:** Done
 
 ### Goal
 
@@ -18,9 +22,28 @@ Add WHOOP data integration so the assistant can use private recovery, sleep, str
 
 ### Current Status
 
-- Milestone created.
-- Implementation not started yet.
-- No WHOOP-specific tests have been run yet.
+- Done for the demo path. The committed fallback is a flat local `demo_files/health.yaml` containing private condition, lab, meal, goals, and stub WHOOP context.
+- `prompts._load_health_context()` reads that YAML at import time, converts numeric health and WHOOP values into qualitative labels, and appends a speech-safe private block to `VIDEO_CALL_PROMPT`.
+- Beat 3 menu guidance now uses visible translated dishes plus food-language reasons by default; diagnosis names, medication names, sensitive category words, and raw numbers stay out of the default spoken path.
+- `VoiceSession.load_demo_files()` explicitly skips `health.yaml` and `whoop_auth.json`, so private health data does not leak into the customer-feedback reasoning context.
+- Live WHOOP OAuth was skipped because `WHOOP_CLIENT_ID` and `WHOOP_CLIENT_SECRET` were unset. No `demo_files/whoop_auth.json` was created; the committed stub `whoop:` subtree remains the source of truth.
+
+### Implementation Commits
+
+- `6266481 [feat] add fake local health data for Beat 3`
+- `b5aa9d8 [feat] inject always-on private health context into VLM prompt`
+
+### Test Status
+
+All requested tests for the stubbed demo path passed.
+
+- Test A speech-safe loader: **PASS**.
+- Test B demo-file isolation: **PASS**.
+- Test C missing WHOOP subtree graceful degrade: **PASS**.
+- Test D live Chinese-menu privacy and grounding regression: **PASS** against local `qwen3.6:35b-a3b`.
+- Test F import-time concatenation: **PASS**.
+- WHOOP credential gate: **PASS** (`WHOOP_CLIENT_ID` / `WHOOP_CLIENT_SECRET` unset, Phase 3 skipped).
+- Test G real WHOOP OAuth: **Not run** because credentials were absent.
 
 ## 2026-04-30 - Claw Demo Integration And GPU Runtime
 

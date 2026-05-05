@@ -1,3 +1,61 @@
+**Feature: Beat 3 private health context**
+**Test #1: Health context loader privacy safety (Test A)**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python - <<'PY' ... import _load_health_context and VIDEO_CALL_PROMPT; assert no raw health/WHOOP numbers, no diagnosis/medication/category labels, qualitative sodium and ramen context present, and loader block is wired into VIDEO_CALL_PROMPT ... PY`
+**Result**:
+```bash
+Test A speech-safe loader: PASS
+```
+
+**Feature: Beat 3 private health context**
+**Test #2: Demo-file isolation (Test B)**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python - <<'PY' ... VoiceSession.__new__(VoiceSession).load_demo_files(); assert health.yaml/whoop_auth sensitive tokens do not appear ... PY`
+**Result**:
+```bash
+Test B demo-file isolation: PASS
+```
+
+**Feature: Beat 3 private health context**
+**Test #3: Missing WHOOP subtree graceful degrade (Test C)**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python - <<'PY' ... copy demo_files/health.yaml, remove whoop:, set HEALTH_YAML_PATH, assert non-empty context includes WHOOP data unavailable plus qualitative meal/condition context and no digits ... PY`
+**Result**:
+```bash
+Test C missing WHOOP graceful degrade: PASS
+```
+
+**Feature: Beat 3 private health context**
+**Test #4: Live Chinese-menu privacy and grounding regression (Test D)**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python - <<'PY' ... send demo_files/menu_zh.png to local qwen3.6:35b-a3b with DEFAULT_SYSTEM_PROMPT + VIDEO_CALL_PROMPT; assert visible translated dish recommendation, visible skip dish, skip/over connective, food-language reason, and no sensitive labels or raw numbers ... PY`
+**Result**:
+```bash
+I'd go with the steamed sea bass over the fried pork chops because the pork is fried and salty, and you've had heavy meals lately.
+Test D live Beat 3 privacy/grounding: PASS
+```
+**Note:** The fixture accepts both the canonical translation "salt-and-pepper pork chop" and the model's observed translation variant "fried pork chop(s)" for `椒盐猪排`.
+
+**Feature: Beat 3 private health context**
+**Test #5: Import-time concatenation (Test F)**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python - <<'PY' ... touch demo_files/health.yaml, assert prompts.VIDEO_CALL_PROMPT constant is unchanged until importlib.reload(prompts), then assert health context remains wired ... PY`
+**Result**:
+```bash
+Test F import-time concatenation: PASS
+```
+
+**Feature: Beat 3 private health context**
+**Test #6: WHOOP OAuth credential gate**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python - <<'PY' ... print whether WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET are set ... PY`
+**Result**:
+```bash
+WHOOP_CLIENT_ID=unset
+WHOOP_CLIENT_SECRET=unset
+```
+**Note:** Phase 3 was skipped by policy because credentials were absent. Test G was not run.
+
 **Feature: Live prompt regression against local Qwen3.6**
 **Test #1: Demo beats prompt and tool-call behavior**
 **Status:** PASS
