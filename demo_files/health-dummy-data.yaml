@@ -1,12 +1,7 @@
 # DUMMY DATA FOR DEMO/TESTING ONLY.
-# The committed values are fake local health context for the Beat 3 demo.
-# A local WHOOP refresh may replace only the `whoop:` subtree with real data.
-# Do not commit refreshed WHOOP values or demo_files/whoop_auth.json.
-
-# Fake-but-realistic local data for the Beat 3 health demo.
-# This file is the single source of truth for private health context.
-# WHOOP refresh (clients/whoop.py --refresh) overwrites only the `whoop:`
-# subtree. Everything else is hand-edited.
+# This committed file is safe to use for scripted Beat 3 rehearsals.
+# For live data, connect WHOOP and let clients/whoop.py write local
+# demo_files/health.yaml, which is gitignored.
 
 condition:
   primary: high blood pressure
@@ -34,6 +29,10 @@ bloodwork:
     diastolic: 88
   notes: Borderline metabolic syndrome markers; sodium-sensitive.
 
+daily_context:
+  - short morning run
+  - jetlag from recent travel
+
 meals:
   - when: yesterday
     meal: lunch
@@ -53,31 +52,27 @@ goals:
   - prioritize lean protein and vegetables
   - improve cardiovascular fitness without spiking strain on low-recovery days
 
-# Refreshed by clients/whoop.py. Hand-edited stub values committed.
 whoop:
   recovery:
-    recovery_score: 42
-    resting_heart_rate: 64
-    hrv_rmssd_milli: 38
-    spo2_percentage: 96.8
-    fetched_at: 2026-05-05T07:12:00Z
+    recovery_score: 38
+    resting_heart_rate: 66
+    hrv_rmssd_milli: 32
+    spo2_percentage: 96.5
+    fetched_at: dummy-scripted-value
   sleep:
-    sleep_performance_percentage: 71
-    total_in_bed_time_milli: 23400000
-    total_rem_sleep_time_milli: 4200000
-    total_slow_wave_sleep_time_milli: 3300000
-    fetched_at: 2026-05-05T07:12:00Z
+    sleep_performance_percentage: 62
+    total_in_bed_time_milli: 21600000
+    total_rem_sleep_time_milli: 3600000
+    total_slow_wave_sleep_time_milli: 2700000
+    fetched_at: dummy-scripted-value
   cycle:
-    strain: 14.6
-    kilojoule: 11300
-    average_heart_rate: 78
-    fetched_at: 2026-05-05T07:12:00Z
+    strain: 12.8
+    kilojoule: 7600
+    average_heart_rate: 82
+    fetched_at: dummy-scripted-value
   recent_workouts:
     - sport: Running
-      strain: 11.2
-      kilojoule: 2900
-      started_at: 2026-05-04T17:30:00Z
-    - sport: Strength
-      strain: 8.4
-      kilojoule: 1500
-      started_at: 2026-05-03T18:00:00Z
+      strain: 7.4
+      kilojoule: 1800
+      average_heart_rate: 142
+      started_at: dummy-morning-run

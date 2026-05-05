@@ -22,11 +22,11 @@ Add WHOOP data integration so the assistant can use private recovery, sleep, str
 
 ### Current Status
 
-- Done for the demo path. The committed fallback is a flat local `demo_files/health.yaml` containing private condition, lab, meal, goals, and stub WHOOP context.
+- Done for the demo path. The local live cache is `demo_files/health.yaml` (gitignored), and the committed fallback is `demo_files/health-dummy-data.yaml` containing dummy private condition, lab, meal, goals, travel, workout, and stub WHOOP context.
 - `prompts._load_health_context()` reads that YAML at import time, converts numeric health and WHOOP values into qualitative labels, and appends a speech-safe private block to `VIDEO_CALL_PROMPT`.
 - Beat 3 menu guidance now uses visible translated dishes plus food-language reasons by default; diagnosis names, medication names, sensitive category words, and raw numbers stay out of the default spoken path.
 - `VoiceSession.load_demo_files()` explicitly skips `health.yaml` and `whoop_auth.json`, so private health data does not leak into the customer-feedback reasoning context.
-- Live WHOOP OAuth is implemented behind `WHOOP_CLIENT_ID` / `WHOOP_CLIENT_SECRET`: `clients/whoop.py` handles auth URLs, token exchange, refresh, endpoint fetches, token storage, and replacement of only the `whoop:` subtree in `demo_files/health.yaml`. The committed stub remains the fallback when credentials are absent.
+- Live WHOOP OAuth is implemented behind `WHOOP_CLIENT_ID` / `WHOOP_CLIENT_SECRET`: `clients/whoop.py` handles auth URLs, token exchange, refresh, endpoint fetches, token storage, and replacement of only the `whoop:` subtree in local `demo_files/health.yaml`. The committed dummy file remains the fallback when live cache is absent.
 
 ### Implementation Commits
 

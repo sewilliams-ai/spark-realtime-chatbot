@@ -139,12 +139,14 @@ All defaults live in `config.py` and can be overridden via environment variables
 | `WHOOP_CLIENT_ID` / `WHOOP_CLIENT_SECRET` | unset | Enables the local WHOOP OAuth routes when both are set |
 | `WHOOP_REDIRECT_URI` | `https://localhost:8443/whoop/callback` | Must exactly match a Redirect URI in the WHOOP Developer Dashboard |
 | `WHOOP_API_BASE_URL` | `https://api.prod.whoop.com/developer` | WHOOP v2 API base used by `clients.whoop` |
+| `HEALTH_YAML_PATH` | `demo_files/health.yaml`, falling back to `demo_files/health-dummy-data.yaml` | Health-context YAML source for the VLM prompt |
 
 ### WHOOP local cache
 
-WHOOP data is optional. The committed `demo_files/health.yaml` is initialized
-with dummy demo/testing values; without credentials, its committed `whoop:`
-subtree is the demo source of truth.
+WHOOP data is optional. The local live cache is `demo_files/health.yaml`, which
+is gitignored because it may contain real WHOOP-derived data. The committed
+fallback is `demo_files/health-dummy-data.yaml`, initialized with dummy
+demo/testing values for consistent rehearsals.
 The hand-edited `meals:` entries use relative timing such as `when: yesterday`
 or `when: 2 days ago`, so the demo does not go stale across recording days.
 
@@ -167,11 +169,27 @@ export WHOOP_REDIRECT_URI=https://localhost:8443/whoop/callback
 ```
 
 Open `https://localhost:8443/whoop/login`, complete consent, and restart the
-server so `prompts.py` reloads the refreshed `demo_files/health.yaml`. To
-refresh later from cron or a terminal:
+server so `prompts.py` reloads the refreshed `demo_files/health.yaml`. To force
+the scripted dummy data instead of live WHOOP cache, launch with:
 
 ```bash
-python -m clients.whoop --refresh
+HEALTH_YAML_PATH=demo_files/health-dummy-data.yaml PORT=8443 ./launch-https.sh --local-asr --tts-overlap --reload
+```
+
+To refresh later from cron or a terminal:
+
+```bash
+./scripts/refresh-whoop.sh
+```
+
+The refresh script runs `python -m clients.whoop --refresh`, uses a lock so two
+refreshes do not race, writes only the local `demo_files/health.yaml`, and
+touches `prompts.py` so a `--reload` server picks up fresh prompt context.
+
+Suggested cron entry for a morning refresh:
+
+```cron
+0 6 * * * cd /home/nvidia/selena/projects/spark-realtime-chatbot && ./scripts/refresh-whoop.sh >> logs/whoop-refresh.log 2>&1
 ```
 
 ---

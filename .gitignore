@@ -38,6 +38,7 @@ env/
 
 # Project specific
 audio_cache/
+demo_files/health.yaml
 demo_files/whoop_auth.json
 test_assets/
 *.wav

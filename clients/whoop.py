@@ -35,10 +35,10 @@ DEFAULT_SCOPES = (
     "read:workout",
     "offline",
 )
-HEALTH_YAML_HEADER = """# DUMMY DATA FOR DEMO/TESTING ONLY.
-# The committed values are fake local health context for the Beat 3 demo.
-# A local WHOOP refresh may replace only the `whoop:` subtree with real data.
-# Do not commit refreshed WHOOP values or demo_files/whoop_auth.json.
+HEALTH_YAML_HEADER = """# LOCAL WHOOP CACHE - DO NOT COMMIT.
+# This file may contain real WHOOP-derived health data for the local demo.
+# The committed scripted fallback lives in demo_files/health-dummy-data.yaml.
+# WHOOP refresh replaces only the `whoop:` subtree.
 
 """
 

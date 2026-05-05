@@ -107,10 +107,16 @@ def _load_claw_persona() -> str:
 # speech-safe summary.
 
 _DEFAULT_HEALTH_YAML = _Path(__file__).parent / "demo_files" / "health.yaml"
+_DUMMY_HEALTH_YAML = _Path(__file__).parent / "demo_files" / "health-dummy-data.yaml"
 
 
 def _health_yaml_path() -> _Path:
-    return _Path(_os.environ.get("HEALTH_YAML_PATH", str(_DEFAULT_HEALTH_YAML)))
+    configured = _os.environ.get("HEALTH_YAML_PATH")
+    if configured:
+        return _Path(configured)
+    if _DEFAULT_HEALTH_YAML.exists():
+        return _DEFAULT_HEALTH_YAML
+    return _DUMMY_HEALTH_YAML
 
 
 def _as_number(value):
@@ -185,6 +191,15 @@ def _meal_phrase(meal: dict, today: _date) -> str:
     if prefix:
         return f"{when} {slot} was a {prefix} {description}"
     return f"{when} {slot} was {description}"
+
+
+def _speech_safe_note(value) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    for digit, word in _RELATIVE_WORDS.items():
+        text = text.replace(digit, word)
+    return text
 
 
 def _private_lab_summary(bloodwork: dict) -> str:
@@ -279,6 +294,14 @@ def _load_health_context() -> str:
     lab_line = _private_lab_summary(data.get("bloodwork") or {})
     whoop_line = _whoop_summary(data.get("whoop") or {})
 
+    daily_context = data.get("daily_context") or []
+    if isinstance(daily_context, list):
+        notes = [_speech_safe_note(note) for note in daily_context]
+        notes = [note for note in notes if note]
+        daily_line = "Daily context: " + "; ".join(notes[:3]) + "." if notes else "Daily context unavailable."
+    else:
+        daily_line = "Daily context unavailable."
+
     meals = data.get("meals") or []
     if isinstance(meals, list) and meals:
         meal_phrases = [
@@ -298,6 +321,7 @@ HEALTH CONTEXT (PRIVATE - do not name aloud):
 - {condition_line}
 - {lab_line} Use these only to inform recommendations; do not recite values or medical category names aloud unless the user explicitly asks for the private details.
 - {whoop_line}
+- {daily_line}
 - {meals_line} {pattern_line}
 
 RECOMMENDATION STYLE (food-language only):

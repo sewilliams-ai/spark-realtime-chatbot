@@ -19,7 +19,7 @@ Test B demo-file isolation: PASS
 **Feature: Beat 3 private health context**
 **Test #3: Missing WHOOP subtree graceful degrade (Test C)**
 **Status:** PASS
-**Code Command**: `.venv-gpu/bin/python - <<'PY' ... copy demo_files/health.yaml, remove whoop:, set HEALTH_YAML_PATH, assert non-empty context includes WHOOP data unavailable plus qualitative meal/condition context from relative meal metadata and no digits ... PY`
+**Code Command**: `.venv-gpu/bin/python - <<'PY' ... copy demo_files/health-dummy-data.yaml, remove whoop:, set HEALTH_YAML_PATH, assert non-empty context includes WHOOP data unavailable plus qualitative meal/condition context from relative meal metadata and no digits ... PY`
 **Result**:
 ```bash
 Test C missing WHOOP graceful degrade: PASS
@@ -72,6 +72,15 @@ whoop auth_url config: PASS
 **Result**:
 ```bash
 whoop yaml/token writers: PASS
+```
+
+**Feature: WHOOP OAuth local cache**
+**Test #2b: Cron refresh wrapper syntax**
+**Status:** PASS
+**Code Command**: `bash -n scripts/refresh-whoop.sh`
+**Result**:
+```bash
+No output. Command exited successfully.
 ```
 
 **Feature: WHOOP OAuth local cache**
