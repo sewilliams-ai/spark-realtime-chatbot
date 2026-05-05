@@ -1,0 +1,12 @@
+{
+  "dishes": [
+    "steamed sea bass",
+    "salt-and-pepper pork chop",
+    "beef noodle soup",
+    "stir-fried greens",
+    "scallion chicken",
+    "fried rice"
+  ],
+  "recommended": "steamed sea bass",
+  "skip": "salt-and-pepper pork chop"
+}

@@ -1,0 +1,78 @@
+# Fake-but-realistic local data for the Beat 3 health demo.
+# This file is the single source of truth for private health context.
+# WHOOP refresh (clients/whoop.py --refresh) overwrites only the `whoop:`
+# subtree. Everything else is hand-edited.
+
+condition:
+  primary: high blood pressure
+  diagnosed: 2024
+  medication: lisinopril 10mg daily
+  secondary:
+    - elevated LDL cholesterol
+  doctor_guidance:
+    - keep daily sodium under 2000 mg
+    - prefer lean proteins, vegetables, whole grains
+    - limit deep-fried foods and cured / processed meats
+
+bloodwork:
+  drawn_at: 2026-04-12
+  lipid_panel:
+    total_cholesterol_mg_dl: 224
+    ldl_mg_dl: 152
+    hdl_mg_dl: 41
+    triglycerides_mg_dl: 168
+  metabolic:
+    fasting_glucose_mg_dl: 102
+    hba1c_percent: 5.7
+  blood_pressure_avg_7d:
+    systolic: 138
+    diastolic: 88
+  notes: Borderline metabolic syndrome markers; sodium-sensitive.
+
+meals:
+  - date: 2026-05-04
+    meal: lunch
+    description: tonkotsu ramen with chashu and a soft-boiled egg
+    tags: [heavy_sodium, rich_broth, refined_carbs]
+  - date: 2026-05-04
+    meal: dinner
+    description: leftover fried rice
+    tags: [heavy_sodium, fried]
+  - date: 2026-05-03
+    meal: lunch
+    description: chicken Caesar salad
+    tags: [moderate_sodium]
+
+goals:
+  - lower sodium intake
+  - prioritize lean protein and vegetables
+  - improve cardiovascular fitness without spiking strain on low-recovery days
+
+# Refreshed by clients/whoop.py. Hand-edited stub values committed.
+whoop:
+  recovery:
+    recovery_score: 42
+    resting_heart_rate: 64
+    hrv_rmssd_milli: 38
+    spo2_percentage: 96.8
+    fetched_at: 2026-05-05T07:12:00Z
+  sleep:
+    sleep_performance_percentage: 71
+    total_in_bed_time_milli: 23400000
+    total_rem_sleep_time_milli: 4200000
+    total_slow_wave_sleep_time_milli: 3300000
+    fetched_at: 2026-05-05T07:12:00Z
+  cycle:
+    strain: 14.6
+    kilojoule: 11300
+    average_heart_rate: 78
+    fetched_at: 2026-05-05T07:12:00Z
+  recent_workouts:
+    - sport: Running
+      strain: 11.2
+      kilojoule: 2900
+      started_at: 2026-05-04T17:30:00Z
+    - sport: Strength
+      strain: 8.4
+      kilojoule: 1500
+      started_at: 2026-05-03T18:00:00Z

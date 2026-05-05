@@ -4,6 +4,7 @@ websockets
 aiohttp
 python-multipart
 httpx
+PyYAML
 
 # ASR
 faster-whisper
