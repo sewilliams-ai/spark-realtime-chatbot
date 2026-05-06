@@ -198,10 +198,37 @@ function getActiveConversationEl() {
 // Chat management state
 let currentChatId = null;  // Current active chat ID
 let chats = {};  // Store all chats: { chatId: { id, title, preview, timestamp, messages: [] } }
+let handoffPromptEl = null;
 
 // Chat management functions
 function generateChatId() {
   return 'chat_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+function generateConversationId() {
+  return 'conv_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+function ensureCurrentConversationId() {
+  if (!currentChatId || !chats[currentChatId]) {
+    return generateConversationId();
+  }
+
+  if (!chats[currentChatId].conversationId) {
+    chats[currentChatId].conversationId = generateConversationId();
+    saveChatsToStorage();
+  }
+  return chats[currentChatId].conversationId;
+}
+
+function getClientDeviceType() {
+  const coarsePointer = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  const narrowViewport = window.innerWidth <= 768;
+  return (coarsePointer || narrowViewport) ? 'mobile' : 'desktop';
+}
+
+function getDeviceLabel(device) {
+  return device === 'mobile' ? 'phone' : 'laptop';
 }
 
 function saveChatsToStorage() {
@@ -328,6 +355,7 @@ function startSelectedChat() {
   console.log('🚀 [StartChat] startSelectedChat() called, selectedChatMode:', selectedChatMode);
   closeChatModeModal();
   closeMobileSidebar();
+  closeHandoffPrompt();
 
   // Save current chat if exists
   if (currentChatId && chats[currentChatId]) {
@@ -352,6 +380,7 @@ function startSelectedChat() {
 
   chats[chatId] = {
     id: chatId,
+    conversationId: generateConversationId(),
     title: chatTitle,
     preview: '',
     timestamp: now.toISOString(),
@@ -1700,6 +1729,8 @@ function escapeHtml(text) {
 }
 
 function loadChat(chatId) {
+  closeHandoffPrompt();
+
   // Save current chat first
   if (currentChatId && chats[currentChatId] && currentChatId !== chatId) {
     saveCurrentChat();
@@ -2059,10 +2090,19 @@ function connectVoiceWebSocket() {
     }
   }
 
-  log(`Connecting to WebSocket: ${location.protocol === "https:" ? "wss://" : "ws://"}${location.host}/ws/voice`);
-  setConnectionStatus("connecting");
+  const conversationId = ensureCurrentConversationId();
+  const deviceType = getClientDeviceType();
+  const params = new URLSearchParams({
+    device: deviceType,
+    chat_id: currentChatId || '',
+    conversation_id: conversationId
+  });
   const wsProtocol = (location.protocol === "https:") ? "wss://" : "ws://";
-  voiceWs = new WebSocket(wsProtocol + location.host + "/ws/voice");
+  const wsUrl = `${wsProtocol}${location.host}/ws/voice?${params.toString()}`;
+
+  log(`Connecting to WebSocket: ${wsUrl}`);
+  setConnectionStatus("connecting");
+  voiceWs = new WebSocket(wsUrl);
   
   // Add connection timeout
   const connectionTimeout = setTimeout(() => {
@@ -2173,6 +2213,176 @@ function connectVoiceWebSocket() {
     }
     isManualDisconnect = false;
   };
+}
+
+function closeHandoffPrompt() {
+  if (handoffPromptEl) {
+    handoffPromptEl.remove();
+    handoffPromptEl = null;
+  }
+}
+
+function syncHandoffChatState(data) {
+  if (!currentChatId || !chats[currentChatId]) return;
+
+  if (data.conversation_id) {
+    chats[currentChatId].conversationId = data.conversation_id;
+  }
+  if (Array.isArray(data.messages)) {
+    chats[currentChatId].messages = data.messages.map(msg => ({
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: msg.content || ''
+    })).filter(msg => msg.content.trim());
+
+    const firstUserMsg = chats[currentChatId].messages.find(msg => msg.role === 'user');
+    const lastMsg = chats[currentChatId].messages[chats[currentChatId].messages.length - 1];
+    if (firstUserMsg) {
+      chats[currentChatId].title = firstUserMsg.content.substring(0, 50) + (firstUserMsg.content.length > 50 ? '...' : '');
+      chats[currentChatId].preview = firstUserMsg.content.substring(0, 100);
+    }
+    if (lastMsg && lastMsg.role === 'assistant') {
+      chats[currentChatId].preview = lastMsg.content.substring(0, 100);
+    }
+  }
+
+  saveChatsToStorage();
+  renderChatList();
+}
+
+function renderHandoffMessages(messages) {
+  const activeEl = getActiveConversationEl();
+  if (!activeEl || !Array.isArray(messages)) return;
+
+  activeEl.innerHTML = '';
+  messages.forEach(msg => {
+    if (!msg.content) return;
+    const msgEl = createMessageElement(msg.role === 'user' ? 'user' : 'assistant', msg.content);
+    activeEl.appendChild(msgEl.container);
+  });
+  currentTransientMsg = null;
+  currentUserMsg = null;
+  scrollToBottom();
+}
+
+function updateHandoffToolState(enabledTools) {
+  if (!Array.isArray(enabledTools)) return;
+  const enabled = new Set(enabledTools);
+  document.querySelectorAll('input[id^="cap"], input[id^="tool"], input[id^="agent"]').forEach(cb => {
+    cb.checked = enabled.has(cb.value);
+  });
+}
+
+function showHandoffPrompt(data) {
+  closeHandoffPrompt();
+
+  const sourceLabel = getDeviceLabel(data.source_device);
+  handoffPromptEl = document.createElement('div');
+  handoffPromptEl.className = 'handoff-banner';
+  handoffPromptEl.innerHTML = `
+    <div class="handoff-copy">
+      <strong>Continue this call here?</strong>
+      <span>${escapeHtml(data.summary || `Active conversation on ${sourceLabel}.`)}</span>
+    </div>
+    <div class="handoff-actions">
+      <button class="handoff-primary" type="button">Continue here</button>
+      <button class="handoff-secondary" type="button">Not now</button>
+    </div>
+  `;
+
+  const continueBtn = handoffPromptEl.querySelector('.handoff-primary');
+  const declineBtn = handoffPromptEl.querySelector('.handoff-secondary');
+
+  continueBtn.onclick = () => {
+    if (voiceWs && voiceWs.readyState === WebSocket.OPEN) {
+      voiceWs.send(JSON.stringify({
+        type: 'resume_handoff',
+        conversation_id: data.conversation_id
+      }));
+    }
+    closeHandoffPrompt();
+  };
+
+  declineBtn.onclick = () => {
+    if (voiceWs && voiceWs.readyState === WebSocket.OPEN) {
+      voiceWs.send(JSON.stringify({ type: 'decline_handoff' }));
+    }
+    closeHandoffPrompt();
+  };
+
+  document.body.appendChild(handoffPromptEl);
+}
+
+async function bringConversationBack(conversationId) {
+  closeHandoffPrompt();
+  if (currentChatId && chats[currentChatId]) {
+    chats[currentChatId].conversationId = conversationId;
+    saveChatsToStorage();
+  }
+
+  const mode = chats[currentChatId]?.mode;
+  if (mode === 'video') {
+    await setupVideoCallMode();
+  } else if (mode === 'call') {
+    await setupVoiceCallMode();
+  }
+  connectVoiceWebSocket();
+}
+
+function showTransferBackPrompt(data) {
+  closeHandoffPrompt();
+
+  const destination = getDeviceLabel(data.to_device);
+  handoffPromptEl = document.createElement('div');
+  handoffPromptEl.className = 'handoff-banner handoff-banner-muted';
+  handoffPromptEl.innerHTML = `
+    <div class="handoff-copy">
+      <strong>${escapeHtml(data.message || `Continued on ${destination}.`)}</strong>
+      <span>You can transfer the live conversation back to this device.</span>
+    </div>
+    <div class="handoff-actions">
+      <button class="handoff-primary" type="button">Bring back</button>
+      <button class="handoff-secondary" type="button">Dismiss</button>
+    </div>
+  `;
+
+  handoffPromptEl.querySelector('.handoff-primary').onclick = () => {
+    bringConversationBack(data.conversation_id);
+  };
+  handoffPromptEl.querySelector('.handoff-secondary').onclick = closeHandoffPrompt;
+  document.body.appendChild(handoffPromptEl);
+}
+
+function handleHandoffResumed(data) {
+  closeHandoffPrompt();
+  hideThinkingIndicator();
+  syncHandoffChatState(data);
+  renderHandoffMessages(data.messages || []);
+
+  if (data.voice && voiceSelect) {
+    voiceSelect.value = data.voice;
+  }
+  updateHandoffToolState(data.enabled_tools);
+  if (voiceCallActive) updateVoiceCallStatus('listening', 'Listening...');
+  if (videoCallActive) updateVideoCallStatus('listening', pttMode ? 'Press SPACE or hold button to talk' : 'Listening...');
+  log(`Conversation handoff resumed: ${data.message_count || 0} messages`);
+}
+
+function handleHandoffTransferred(data) {
+  hideThinkingIndicator();
+  saveCurrentChat();
+  stopTtsPlayback();
+  teardownVoiceCallMode();
+  teardownVideoCallMode();
+  if (voiceWs && voiceWs.readyState === WebSocket.OPEN) {
+    isManualDisconnect = true;
+    try {
+      voiceWs.close();
+    } catch (e) {}
+    voiceWs = null;
+  }
+  setConnectionStatus('disconnected');
+  showTransferBackPrompt(data);
+  log(data.message || 'Conversation transferred to another device.');
 }
 
 // Markdown Assistant state and functions
@@ -2657,9 +2867,42 @@ async function handleMessage(data) {
   switch (data.type) {
     case "connected":
       log("Server ready - connection established");
+      if (data.conversation_id && currentChatId && chats[currentChatId]) {
+        chats[currentChatId].conversationId = data.conversation_id;
+        saveChatsToStorage();
+      }
       // Initialize audio context when connected (needed for greeting playback)
       initializeAudioOnConnection();
       // Greeting will be sent by server automatically
+      break;
+
+    case "handoff_available":
+      showHandoffPrompt(data);
+      break;
+
+    case "handoff_resumed":
+      handleHandoffResumed(data);
+      break;
+
+    case "handoff_transferred":
+      handleHandoffTransferred(data);
+      break;
+
+    case "handoff_declined":
+      if (data.conversation_id && currentChatId && chats[currentChatId]) {
+        chats[currentChatId].conversationId = data.conversation_id;
+        saveChatsToStorage();
+      }
+      closeHandoffPrompt();
+      break;
+
+    case "handoff_unavailable":
+      closeHandoffPrompt();
+      log(data.message || "Handoff unavailable");
+      break;
+
+    case "handoff_required":
+      log("Choose whether to continue the active call before sending audio.");
       break;
 
     case "asr_partial":

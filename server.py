@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import secrets
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -84,6 +85,115 @@ conversation_history: List[Dict[str, str]] = [
         ),
     }
 ]
+
+# Process-local conversation handoff state. This is intentionally in-memory:
+# a server restart drops handoff offers, and no conversation content is written
+# to demo files, caches, or a database.
+HANDOFF_TTL_SECONDS = 30 * 60
+HANDOFF_HISTORY_LIMIT = 20
+HANDOFF_CONTENT_LIMIT = 4000
+
+conversation_states: Dict[str, Dict[str, Any]] = {}
+active_conversation_sessions: Dict[str, "VoiceSession"] = {}
+
+
+def _new_conversation_id() -> str:
+    return f"conv_{uuid.uuid4().hex[:12]}"
+
+
+def _normalize_device_type(device: str) -> str:
+    return "mobile" if device == "mobile" else "desktop"
+
+
+def _handoff_device_label(device: str) -> str:
+    return "phone" if _normalize_device_type(device) == "mobile" else "laptop"
+
+
+def _sanitize_handoff_history(
+    history: List[Dict[str, Any]],
+    fallback_system_prompt: str,
+) -> List[Dict[str, str]]:
+    """Keep only model-safe conversation messages needed for handoff."""
+    sanitized: List[Dict[str, str]] = []
+    for msg in history or []:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role not in {"system", "user", "assistant"}:
+            continue
+        if not isinstance(content, str) or not content.strip():
+            continue
+        sanitized.append({
+            "role": role,
+            "content": content.strip()[:HANDOFF_CONTENT_LIMIT],
+        })
+
+    system_msg = next(
+        (msg for msg in sanitized if msg["role"] == "system"),
+        {"role": "system", "content": fallback_system_prompt},
+    )
+    turns = [msg for msg in sanitized if msg["role"] != "system"]
+    return [system_msg] + turns[-HANDOFF_HISTORY_LIMIT:]
+
+
+def _handoff_visible_messages(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    return [
+        {"role": msg["role"], "content": msg["content"]}
+        for msg in history
+        if msg.get("role") in {"user", "assistant"} and msg.get("content")
+    ]
+
+
+def _handoff_summary(history: List[Dict[str, str]]) -> str:
+    visible = _handoff_visible_messages(history)
+    user_turns = [msg["content"] for msg in visible if msg["role"] == "user"]
+    if not visible:
+        return "No completed conversation yet."
+    if user_turns:
+        last_user = user_turns[-1]
+        return f"{len(visible)} messages. Last topic: {last_user[:120]}"
+    return f"{len(visible)} messages ready to continue."
+
+
+def _prune_conversation_states() -> None:
+    now = time.time()
+    stale_ids = [
+        conversation_id
+        for conversation_id, state in conversation_states.items()
+        if now - float(state.get("updated_at", 0)) > HANDOFF_TTL_SECONDS
+    ]
+    for conversation_id in stale_ids:
+        conversation_states.pop(conversation_id, None)
+
+
+def _state_available_for_handoff(state: Dict[str, Any], device_type: str) -> bool:
+    conversation_id = state.get("conversation_id")
+    if not conversation_id:
+        return False
+    owner_session = active_conversation_sessions.get(conversation_id)
+    if not owner_session or not owner_session.alive:
+        return False
+    if owner_session.device_type == _normalize_device_type(device_type):
+        return False
+    return int(state.get("message_count", 0)) > 0
+
+
+def _get_handoff_candidate(conversation_id: str, device_type: str) -> Optional[Dict[str, Any]]:
+    """Return a handoff state only when another active device owns the call."""
+    _prune_conversation_states()
+
+    if conversation_id:
+        state = conversation_states.get(conversation_id)
+        if state and _state_available_for_handoff(state, device_type):
+            return state
+
+    candidates = [
+        state
+        for state in conversation_states.values()
+        if _state_available_for_handoff(state, device_type)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda state: float(state.get("updated_at", 0)))
 
 
 @asynccontextmanager
@@ -314,8 +424,18 @@ async def index():
 
 class VoiceSession:
     """Manages state for a persistent voice session."""
-    def __init__(self, websocket: WebSocket):
+    def __init__(
+        self,
+        websocket: WebSocket,
+        chat_id: str = "",
+        conversation_id: str = "",
+        device_type: str = "desktop",
+    ):
         self.websocket = websocket
+        self.session_id = f"session_{uuid.uuid4().hex[:12]}"
+        self.chat_id = chat_id or f"chat_{uuid.uuid4().hex[:12]}"
+        self.conversation_id = conversation_id or _new_conversation_id()
+        self.device_type = _normalize_device_type(device_type)
         self.asr_webm_bytes = bytearray()
         self.asr_pcm = np.zeros(0, dtype=np.float32)
         self.asr_last_text = ""
@@ -363,6 +483,40 @@ class VoiceSession:
     def alive(self) -> bool:
         """Fast check: can we still send to the client?"""
         return (not self._ws_closed) and (self.websocket.client_state == WebSocketState.CONNECTED)
+
+    def export_handoff_state(self) -> Dict[str, Any]:
+        history = _sanitize_handoff_history(self.conversation_history, self.system_prompt)
+        visible_messages = _handoff_visible_messages(history)
+        return {
+            "conversation_id": self.conversation_id,
+            "owner_session_id": self.session_id,
+            "owner_device": self.device_type,
+            "owner_chat_id": self.chat_id,
+            "system_prompt": self.system_prompt,
+            "conversation_history": history,
+            "enabled_tools": list(self.enabled_tools),
+            "selected_voice": self.selected_voice,
+            "updated_at": time.time(),
+            "message_count": len(visible_messages),
+            "summary": _handoff_summary(history),
+            "messages": visible_messages,
+        }
+
+    def publish_handoff_state(self) -> None:
+        state = self.export_handoff_state()
+        if state["message_count"] <= 0:
+            return
+        conversation_states[self.conversation_id] = state
+
+    def hydrate_from_handoff_state(self, state: Dict[str, Any]) -> None:
+        self.conversation_id = state.get("conversation_id") or self.conversation_id
+        self.system_prompt = state.get("system_prompt") or self.system_prompt
+        self.conversation_history = _sanitize_handoff_history(
+            state.get("conversation_history", []),
+            self.system_prompt,
+        )
+        self.enabled_tools = list(state.get("enabled_tools") or [])
+        self.selected_voice = state.get("selected_voice") or self.selected_voice
 
     async def send_message(self, msg_type: str, data: Dict[str, Any] = None):
         """Send a JSON message to the client."""
@@ -919,6 +1073,7 @@ class VoiceSession:
                     if full_response:
                         # Add to conversation history
                         self.conversation_history.append({"role": "assistant", "content": full_response})
+                        self.publish_handoff_state()
                         # Send final text message (TTS already done in pipeline)
                         await self.send_message("final_response", {"text": full_response})
                         print(f"[Voice Session] Overlap pipeline complete: {len(full_response)} chars")
@@ -1202,6 +1357,7 @@ CRITICAL INSTRUCTIONS:
                                         # Add to conversation history
                                         markdown_summary = f"Generated documentation at {file_path} for: {agent_task}\n\n{markdown_response[:500]}{'...' if len(markdown_response) > 500 else ''}"
                                         self.conversation_history.append({"role": "assistant", "content": markdown_summary})
+                                        self.publish_handoff_state()
                                         
                                         # Send a message to frontend to add markdown to conversation UI
                                         await self.send_message("agent_markdown_complete", {
@@ -1260,6 +1416,7 @@ CRITICAL INSTRUCTIONS:
                                 if tool_final_response:
                                     print(f"[Voice Session] Tool execution final response: {tool_final_response[:100]}...")
                                     self.conversation_history.append({"role": "assistant", "content": tool_final_response})
+                                    self.publish_handoff_state()
                                     if spoke_anything:
                                         # Already streamed sentence-by-sentence. Flush the trailing
                                         # fragment and emit the UI-only final message.
@@ -1339,6 +1496,7 @@ CRITICAL INSTRUCTIONS:
             print(f"[Voice Session] Sending response: {final_response[:100]}...")
             # Add to conversation history
             self.conversation_history.append({"role": "assistant", "content": final_response})
+            self.publish_handoff_state()
             # Send final response and TTS
             await self.send_final_response(final_response)
         else:
@@ -1590,6 +1748,7 @@ CRITICAL INSTRUCTIONS:
                     f"{files['realtime_design']}, {files['personal_todos']}"
                 )
             })
+            self.publish_handoff_state()
             await self.send_message("workspace_update_complete", {
                 "summary": summary,
                 "files": files,
@@ -1661,6 +1820,7 @@ CRITICAL INSTRUCTIONS:
                     "role": "assistant",
                     "content": f"Created {file_path} for: {task}"
                 })
+                self.publish_handoff_state()
             
             # Signal completion
             await self.send_message("agent_markdown_chunk", {"content": "", "done": True})
@@ -1846,6 +2006,7 @@ Output the complete HTML code."""
                 "role": "assistant", 
                 "content": content_response if content_response else thinking_response
             })
+            self.publish_handoff_state()
             
             # Speak the conclusion (it should already be TTS-friendly from the prompt)
             if content_response:
@@ -1891,31 +2052,94 @@ Output the complete HTML code."""
 MIN_AUDIO_SECONDS = 0.5
 
 
+async def send_session_greeting(session: VoiceSession) -> None:
+    """Send the normal call greeting without adding it to conversation history."""
+    import random
+
+    greetings = [
+        "Hey! What's up?",
+        "Hi there!",
+        "Hey, Claw here. What's up?",
+        "What can I help with?",
+        "Hi! Ready when you are.",
+    ]
+    greeting = random.choice(greetings)
+    print(f"[Voice Call] Sending greeting with voice: {session.selected_voice}")
+    await session.send_message("final_response", {"text": greeting})
+    await session.stream_tts(greeting, is_transient=False, voice=session.selected_voice)
+
+
+async def send_handoff_resumed(session: VoiceSession, state: Dict[str, Any]) -> None:
+    session.hydrate_from_handoff_state(state)
+    await session.send_message("handoff_resumed", {
+        "conversation_id": session.conversation_id,
+        "source_device": state.get("owner_device"),
+        "summary": state.get("summary", ""),
+        "message_count": state.get("message_count", 0),
+        "messages": state.get("messages", []),
+        "enabled_tools": session.enabled_tools,
+        "voice": session.selected_voice,
+    })
+    session.publish_handoff_state()
+
+
+async def transfer_conversation_control(
+    new_session: VoiceSession,
+    old_session: Optional[VoiceSession],
+) -> None:
+    if not old_session or old_session is new_session or not old_session.alive:
+        return
+
+    destination = _handoff_device_label(new_session.device_type)
+    await old_session.send_message("handoff_transferred", {
+        "conversation_id": new_session.conversation_id,
+        "to_device": new_session.device_type,
+        "message": f"Continued on {destination}.",
+    })
+    old_session._ws_closed = True
+    try:
+        await old_session.websocket.close(
+            code=1000,
+            reason=f"continued on {destination}",
+        )
+    except Exception:
+        pass
+
+
 @app.websocket("/ws/voice")
 async def voice_call(websocket: WebSocket):
     """Persistent voice call WebSocket - handles ASR, LLM, and TTS."""
     await websocket.accept()
-    session = VoiceSession(websocket)
+    session = VoiceSession(
+        websocket,
+        chat_id=websocket.query_params.get("chat_id", ""),
+        conversation_id=websocket.query_params.get("conversation_id", ""),
+        device_type=websocket.query_params.get("device", "desktop"),
+    )
+    handoff_candidate = _get_handoff_candidate(session.conversation_id, session.device_type)
+    handoff_pending = bool(handoff_candidate)
+    if not handoff_candidate:
+        active_conversation_sessions[session.conversation_id] = session
     
-    print("[Voice Call] Client connected")
+    print(f"[Voice Call] Client connected ({session.device_type}, {session.conversation_id})")
     try:
-        await session.send_message("connected", {"status": "ready"})
-        # Wait a moment for frontend to send initial voice selection
-        await asyncio.sleep(0.2)
-        # Send a short greeting (don't add to conversation history)
-        # Pick a random short greeting for variety
-        import random
-        greetings = [
-            "Hey! What's up?",
-            "Hi there!",
-            "Hey, Claw here. What's up?",
-            "What can I help with?",
-            "Hi! Ready when you are.",
-        ]
-        greeting = random.choice(greetings)
-        print(f"[Voice Call] Sending greeting with voice: {session.selected_voice}")
-        await session.send_message("final_response", {"text": greeting})
-        await session.stream_tts(greeting, is_transient=False, voice=session.selected_voice)
+        await session.send_message("connected", {
+            "status": "ready",
+            "chat_id": session.chat_id,
+            "conversation_id": session.conversation_id,
+            "device": session.device_type,
+        })
+        if handoff_candidate:
+            await session.send_message("handoff_available", {
+                "conversation_id": handoff_candidate.get("conversation_id"),
+                "source_device": handoff_candidate.get("owner_device"),
+                "summary": handoff_candidate.get("summary", ""),
+                "message_count": handoff_candidate.get("message_count", 0),
+            })
+        else:
+            # Wait a moment for frontend to send initial voice selection
+            await asyncio.sleep(0.2)
+            await send_session_greeting(session)
     except Exception as e:
         print(f"[Voice Call] Error sending initial message: {e}")
         import traceback
@@ -1935,6 +2159,11 @@ async def voice_call(websocket: WebSocket):
             
             # Binary = audio chunk for ASR
             if msg.get("bytes") is not None:
+                if handoff_pending:
+                    await session.send_message("handoff_required", {
+                        "conversation_id": handoff_candidate.get("conversation_id") if handoff_candidate else session.conversation_id,
+                    })
+                    continue
                 chunk_bytes = msg["bytes"]
                 # Voice-mode barge-in: a Claw turn streaming → user spoke → cancel.
                 if session._claw_in_flight:
@@ -1952,6 +2181,21 @@ async def voice_call(websocket: WebSocket):
                 try:
                     data = json.loads(msg["text"])
                     msg_type = data.get("type")
+
+                    pre_handoff_messages = {
+                        "ping",
+                        "resume_handoff",
+                        "decline_handoff",
+                        "set_voice",
+                        "set_system_prompt",
+                        "set_tools",
+                        "get_system_prompt",
+                    }
+                    if handoff_pending and msg_type not in pre_handoff_messages:
+                        await session.send_message("handoff_required", {
+                            "conversation_id": handoff_candidate.get("conversation_id") if handoff_candidate else session.conversation_id,
+                        })
+                        continue
                     
                     if msg_type == "asr_end":
                         # User finished speaking
@@ -1970,9 +2214,46 @@ async def voice_call(websocket: WebSocket):
                     elif msg_type == "ping":
                         # Keep-alive ping
                         await session.send_message("pong")
+
+                    elif msg_type == "resume_handoff":
+                        source_conversation_id = data.get("conversation_id") or session.conversation_id
+                        if source_conversation_id != session.conversation_id:
+                            session.conversation_id = source_conversation_id
+                        state = _get_handoff_candidate(session.conversation_id, session.device_type)
+                        if not state:
+                            await session.send_message("handoff_unavailable", {
+                                "conversation_id": session.conversation_id,
+                                "message": "This conversation is no longer available to continue.",
+                            })
+                            continue
+
+                        old_session = active_conversation_sessions.get(session.conversation_id)
+                        active_conversation_sessions[session.conversation_id] = session
+                        await send_handoff_resumed(session, state)
+                        await transfer_conversation_control(session, old_session)
+                        handoff_pending = False
+
+                    elif msg_type == "decline_handoff":
+                        previous_conversation_id = session.conversation_id
+                        session.conversation_id = _new_conversation_id()
+                        session.conversation_history = [
+                            {
+                                "role": "system",
+                                "content": session.system_prompt,
+                            }
+                        ]
+                        active_conversation_sessions[session.conversation_id] = session
+                        await session.send_message("handoff_declined", {
+                            "conversation_id": session.conversation_id,
+                            "previous_conversation_id": previous_conversation_id,
+                        })
+                        handoff_pending = False
+                        await asyncio.sleep(0.1)
+                        await send_session_greeting(session)
                     
                     elif msg_type == "reset":
                         # Reset conversation
+                        conversation_states.pop(session.conversation_id, None)
                         session.conversation_history = [
                             {
                                 "role": "system",
@@ -1986,6 +2267,7 @@ async def voice_call(websocket: WebSocket):
                         voice = data.get("voice")
                         if voice:
                             session.selected_voice = voice
+                            session.publish_handoff_state()
                             await session.send_message("voice_changed", {"voice": voice})
                         else:
                             await session.send_message("error", {"error": "No voice specified"})
@@ -2001,6 +2283,7 @@ async def voice_call(websocket: WebSocket):
                             else:
                                 session.conversation_history.insert(0, {"role": "system", "content": prompt})
                             print(f"[Voice Session] System prompt changed")
+                            session.publish_handoff_state()
                             await session.send_message("system_prompt_changed", {"prompt": prompt})
                             # Also send the updated prompt so UI can sync
                             await session.send_message("system_prompt", {"prompt": prompt})
@@ -2014,6 +2297,7 @@ async def voice_call(websocket: WebSocket):
                             session.enabled_tools = enabled_tools
                             enabled_tool_defs = _filter_for_demo(get_enabled_tools(enabled_tools))
                             print(f"[Voice Session] Tools updated: {enabled_tools} -> {[t['function']['name'] for t in enabled_tool_defs]}")
+                            session.publish_handoff_state()
                             await session.send_message("tools_changed", {"tools": enabled_tools})
                         else:
                             await session.send_message("error", {"error": "Invalid tools format"})
@@ -2207,6 +2491,7 @@ async def voice_call(websocket: WebSocket):
                                                     "role": "assistant",
                                                     "content": f"Got it! I'll remember you as {enroll_name}."
                                                 })
+                                                session.publish_handoff_state()
                                                 continue  # Skip VLM call
                                             else:
                                                 await session.stream_tts("I couldn't see your face clearly. Please try again.")
@@ -2362,6 +2647,7 @@ async def voice_call(websocket: WebSocket):
 
                                             if synth_text.strip():
                                                 session.conversation_history.append({"role": "assistant", "content": synth_text})
+                                                session.publish_handoff_state()
                                                 await session.send_message("llm_final", {"text": synth_text})
                                                 if progressive:
                                                     tail = sb.strip()
@@ -2376,6 +2662,7 @@ async def voice_call(websocket: WebSocket):
                                                 "role": "assistant",
                                                 "content": response_text
                                             })
+                                            session.publish_handoff_state()
                                             await session.send_message("llm_final", {"text": response_text})
                                             await session.stream_tts(response_text)
                                 else:
@@ -2400,6 +2687,7 @@ async def voice_call(websocket: WebSocket):
                                             "role": "assistant",
                                             "content": response_text
                                         })
+                                        session.publish_handoff_state()
                                         await session.send_message("llm_final", {"text": response_text})
                                         await session.stream_tts(response_text)
                             else:
@@ -2438,6 +2726,8 @@ async def voice_call(websocket: WebSocket):
         except:
             pass
     finally:
+        if active_conversation_sessions.get(session.conversation_id) is session:
+            active_conversation_sessions.pop(session.conversation_id, None)
         print("[Voice Call] Session ended")
 
 

@@ -1832,6 +1832,88 @@
       50% { opacity: 0.5; }
     }
 
+    /* Conversation Handoff */
+    .handoff-banner {
+      position: fixed;
+      left: 50%;
+      bottom: 1.25rem;
+      transform: translateX(-50%);
+      z-index: 2000;
+      width: min(640px, calc(100vw - 2rem));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.875rem 1rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--primary);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .handoff-banner-muted {
+      border-left-color: var(--accent);
+    }
+
+    .handoff-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+    }
+
+    .handoff-copy strong {
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      font-weight: 700;
+    }
+
+    .handoff-copy span {
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .handoff-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-shrink: 0;
+    }
+
+    .handoff-actions button {
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      font-weight: 700;
+      padding: 0.5rem 0.75rem;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .handoff-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: white;
+    }
+
+    .handoff-primary:hover {
+      background: var(--primary-hover);
+      border-color: var(--primary-hover);
+    }
+
+    .handoff-secondary {
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+    }
+
+    .handoff-secondary:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
     /* Thinking Indicator */
     .thinking-indicator {
       display: flex;
@@ -1955,5 +2037,15 @@
         min-height: 0;
         margin-top: 0;
         padding-bottom: 72px;
+      }
+
+      .handoff-banner {
+        align-items: stretch;
+        flex-direction: column;
+        bottom: 0.75rem;
+      }
+
+      .handoff-actions button {
+        flex: 1;
       }
     }

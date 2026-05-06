@@ -4,6 +4,28 @@
 
 - Add a dev-mode launch script that handles CTranslate2 source compilation for DGX Spark/GB10, including environment creation, activation, dependency installation, and launching through `launch-https.sh`.
 
+## 2026-05-06 - Bidirectional Conversation Handoff
+
+**Status:** Done
+
+### Summary
+
+Added process-local, context-preserving handoff for active voice/video conversations. A second device now receives an in-call offer only when another active device owns the same `conversation_id`; accepting hydrates completed conversation context, selected voice, system prompt, and enabled tools, then transfers ownership. The displaced device shows a bring-back action so the same conversation can move phone -> laptop or laptop -> phone repeatedly.
+
+### Implementation
+
+- `server.py` keeps sanitized in-memory handoff state keyed by `conversation_id`, with active-owner tracking, TTL pruning, pending-handoff guards, and generic transfer control.
+- `static/js/app.js` assigns browser-local conversation ids, sends `device`, `chat_id`, and `conversation_id` on `/ws/voice`, replays resumed messages into the current call, and handles continue/bring-back actions.
+- `static/css/styles.css` adds a compact handoff banner without changing `static/index.html`.
+- `bench/test_handoff.py` covers the bidirectional server mechanics without starting the GPU server.
+
+### Test Status
+
+- Handoff helper smoke: **PASS**.
+- Python/JS syntax checks: **PASS**.
+- Handoff static assertions: **PASS**.
+- `git diff --check`: **PASS**.
+
 ## 2026-04-30 - WHOOP Integration
 
 **Status:** Done

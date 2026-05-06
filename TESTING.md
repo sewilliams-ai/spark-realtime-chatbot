@@ -1,3 +1,40 @@
+**Feature: Bidirectional conversation handoff**
+**Test #1: Server handoff helper smoke**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python bench/test_handoff.py`
+**Result**:
+```bash
+handoff helper smoke: PASS
+```
+**Coverage:** Sanitizes handoff history, drops tool-only messages, preserves system prompt/tools/voice, discovers the newest active conversation even when the new device does not know the prior `conversation_id`, exposes offers only to another active device, transfers desktop -> mobile, transfers mobile -> desktop, and TTL-prunes stale state.
+
+**Feature: Bidirectional conversation handoff**
+**Test #2: Syntax and static checks**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python -m py_compile server.py bench/test_handoff.py && node --check static/js/app.js`
+**Result**:
+```bash
+No output. Commands exited successfully.
+```
+
+**Feature: Bidirectional conversation handoff**
+**Test #3: Handoff token static assertions**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python - <<'PY' ... assert server/app tokens for conversation_id, resume_handoff, handoff_transferred, handoff_required, and bringConversationBack ... PY`
+**Result**:
+```bash
+handoff static assertions: PASS
+```
+
+**Feature: Bidirectional conversation handoff**
+**Test #4: Whitespace check**
+**Status:** PASS
+**Code Command**: `git diff --check`
+**Result**:
+```bash
+No output. Command exited successfully.
+```
+
 **Feature: Beat 3 private health context**
 **Test #1: Health context loader privacy safety (Test A)**
 **Status:** PASS
