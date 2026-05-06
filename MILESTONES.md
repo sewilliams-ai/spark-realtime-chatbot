@@ -35,6 +35,7 @@ Replaced the active hard-coded demo beats with the Computex flow: realtime camer
 - `9091129 [feat] route Computex workspace updates`
 - `e4f6101 [feat] add Computex demo prompt tests`
 - `6dfed95 [fix] accept visible menu contrast in prompt test`
+- `2192ba9 [docs] record Computex demo closeout`
 
 ## 2026-05-06 - Bidirectional Conversation Handoff
 

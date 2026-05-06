@@ -89,4 +89,4 @@ static/js/app.js`, `.venv-gpu/bin/python bench/test_computex_workspace.py`,
 `.venv-gpu/bin/python bench/test_handoff.py`, `.venv-gpu/bin/python
 bench/test_demo_prompts.py`, and `git diff --check`; all passed after tightening
 the menu test harness to accept any visible less-ideal menu item with a
-food-language reason. Closeout commit: pending.
+food-language reason. Closeout commit: `2192ba9`.
