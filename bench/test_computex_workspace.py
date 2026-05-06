@@ -18,6 +18,10 @@ from tools import ALL_TOOLS, execute_tool, is_agent_tool
 
 
 def main() -> int:
+    team_members = server._computex_team_members()
+    team_names = [member["name"] for member in team_members]
+    first_member = team_members[0]
+
     assert "html_assistant" in ALL_TOOLS
     assert "codebase_assistant" in ALL_TOOLS
     assert is_agent_tool("html_assistant")
@@ -166,6 +170,12 @@ ignored
         combined_request = session.codebase_intent_text("diagram into a front-end MVP.")
         assert session.is_codebase_build_request(combined_request)
         assert not getattr(session, "_pending_codebase_fragment", "")
+        session.remember_spoken_text("On it.")
+        assert session.is_recent_spoken_echo("On it.")
+        assert not session.is_recent_spoken_echo("Please turn this sketch into an MVP")
+        assert session.is_camera_check_request("Hey, am I on camera?")
+        assert session.is_camera_check_request("camera.")
+        assert not session.is_camera_check_request("Please turn the camera")
         session.conversation_history = [
             {"role": "user", "content": "Please send an update to my team saying the strategic partnership is on track."},
             {"role": "assistant", "content": "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"},
@@ -177,14 +187,13 @@ ignored
         )
         context = session.build_workspace_update_context("and Q3 of 2026.")
         assert "team@spark-demo.local" in context
-        assert "Avery owns hardware partnerships" in context
+        assert f"{first_member['name']} owns {first_member['role']}" in context
         assert server._computex_team_email() == "team@spark-demo.local"
-        assert any(member["name"] == "Avery" for member in server._computex_team_members())
+        assert any(member["name"] == first_member["name"] for member in server._computex_team_members())
 
         todos = session.extract_workspace_todos("Update my team", request, [])
-        assert any("Avery" in item for item in todos), todos
-        assert any("Morgan" in item for item in todos), todos
-        assert any("Riley" in item for item in todos), todos
+        for name in team_names:
+            assert any(name in item for item in todos), todos
         assert any("oolong" in item.lower() for item in todos), todos
         string_items = session.extract_workspace_todos(
             "Draft update",
@@ -202,7 +211,7 @@ ignored
 
         assert "Hardware partners" in team
         assert "team@spark-demo.local" in team
-        assert "Avery owns hardware partnerships" in team
+        assert f"{first_member['name']} owns {first_member['role']}" in team
         assert "Agent Workbench" in brief
         assert "high mountain oolong tea" in personal
         assert "spark-computex-team-update" in team
@@ -210,6 +219,52 @@ ignored
         assert "spark-computex-personal-todos" in personal
         for stale in ("spark-beat4", "Buy umbrella", "Redis pub/sub"):
             assert stale not in joined, stale
+
+        async def scheduler_smoke():
+            old_idle = os.environ.get("CODEBASE_AGENT_IDLE_SECONDS")
+            os.environ["CODEBASE_AGENT_IDLE_SECONDS"] = "0.05"
+            server.live_qwen_turns = 0
+            server.last_live_qwen_at = 0.0
+            server.codebase_qwen_requests.clear()
+            sleeper = asyncio.create_task(asyncio.sleep(10))
+            server.codebase_qwen_requests.add(sleeper)
+            server._mark_live_qwen_start("unit-test")
+            try:
+                await sleeper
+                assert False, "background request should be cancelled by live Qwen turn"
+            except asyncio.CancelledError:
+                pass
+            server._mark_live_qwen_done("unit-test")
+            waited_at = asyncio.get_running_loop().time()
+            await server._wait_for_codebase_qwen_slot()
+            assert asyncio.get_running_loop().time() - waited_at >= 0.04
+            server.codebase_qwen_requests.clear()
+            if old_idle is None:
+                os.environ.pop("CODEBASE_AGENT_IDLE_SECONDS", None)
+            else:
+                os.environ["CODEBASE_AGENT_IDLE_SECONDS"] = old_idle
+
+        asyncio.run(scheduler_smoke())
+
+        async def duplicate_codebase_smoke():
+            calls = []
+            release = asyncio.Event()
+
+            async def fake_execute(task, context="", output_dir="agent_monitor_mvp"):
+                calls.append((task, context, output_dir))
+                await release.wait()
+
+            session._codebase_agent_running = False
+            session.execute_codebase_agent = fake_execute
+            assert session.start_codebase_agent_task("first", "ctx", "agent_monitor_mvp")
+            await asyncio.sleep(0)
+            assert not session.start_codebase_agent_task("second", "", "agent_monitor_mvp")
+            release.set()
+            await asyncio.sleep(0.01)
+            assert calls == [("first", "ctx", "agent_monitor_mvp")]
+            assert not session._codebase_agent_running
+
+        asyncio.run(duplicate_codebase_smoke())
 
         sent = []
 

@@ -99,7 +99,55 @@ HANDOFF_CONTENT_LIMIT = 4000
 conversation_states: Dict[str, Dict[str, Any]] = {}
 active_conversation_sessions: Dict[str, "VoiceSession"] = {}
 codebase_preview_processes: Dict[str, Dict[str, Any]] = {}
+live_qwen_turns = 0
+last_live_qwen_at = 0.0
+codebase_qwen_requests: set[asyncio.Task] = set()
 COMPUTEX_DEMO_YAML = Path(__file__).parent / "demo_files" / "computex-demo.yaml"
+
+
+def _codebase_idle_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get("CODEBASE_AGENT_IDLE_SECONDS", "2.0")))
+    except ValueError:
+        return 2.0
+
+
+def _cancel_codebase_qwen_requests(reason: str) -> None:
+    cancelled = 0
+    for task in list(codebase_qwen_requests):
+        if not task.done():
+            task.cancel()
+            cancelled += 1
+    if cancelled:
+        print(f"[Qwen Scheduler] Cancelled {cancelled} background codebase request(s): {reason}")
+
+
+def _mark_live_qwen_start(reason: str) -> None:
+    global live_qwen_turns, last_live_qwen_at
+    live_qwen_turns += 1
+    last_live_qwen_at = time.monotonic()
+    _cancel_codebase_qwen_requests(reason)
+    print(f"[Qwen Scheduler] live start: {reason} (active={live_qwen_turns})")
+
+
+def _mark_live_qwen_done(reason: str) -> None:
+    global live_qwen_turns, last_live_qwen_at
+    live_qwen_turns = max(0, live_qwen_turns - 1)
+    last_live_qwen_at = time.monotonic()
+    print(f"[Qwen Scheduler] live done: {reason} (active={live_qwen_turns})")
+
+
+async def _wait_for_codebase_qwen_slot() -> None:
+    """Wait until live Qwen traffic has been quiet for a short idle window."""
+    idle_s = _codebase_idle_seconds()
+    while True:
+        active = live_qwen_turns
+        since_live = time.monotonic() - last_live_qwen_at if last_live_qwen_at else idle_s
+        remaining_idle = max(0.0, idle_s - since_live)
+        if active <= 0 and remaining_idle <= 0:
+            return
+        wait_s = 0.25 if active > 0 else min(max(remaining_idle, 0.1), 0.5)
+        await asyncio.sleep(wait_s)
 
 
 def _new_conversation_id() -> str:
@@ -690,6 +738,9 @@ class VoiceSession:
         # Once set, every streaming loop should bail out of its LLM read.
         # Set by send_message/send_audio_chunk when the WS is gone.
         self._ws_closed: bool = False
+        self._codebase_agent_running: bool = False
+        self._last_spoken_text: str = ""
+        self._last_spoken_at: float = 0.0
 
     async def cancel_claw_in_flight(self) -> None:
         """Cancel any in-flight Claw streaming turn (barge-in / user spoke again)."""
@@ -745,12 +796,43 @@ class VoiceSession:
         await self.send_message("final_response", {"text": message})
         await self.stream_tts(message, is_transient=True)
 
-    def start_codebase_agent_task(self, task: str, context: str = "", output_dir: str = "agent_monitor_mvp") -> None:
+    @staticmethod
+    def _normalize_echo_text(text: str) -> str:
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+
+    def remember_spoken_text(self, text: str) -> None:
+        normalized = self._normalize_echo_text(text)
+        if normalized:
+            self._last_spoken_text = normalized
+            self._last_spoken_at = time.time()
+
+    def is_recent_spoken_echo(self, text: str) -> bool:
+        """Suppress short ASR echoes of the assistant's own just-spoken ack."""
+        normalized = self._normalize_echo_text(text)
+        if normalized not in {"on it", "got it", "sure", "good", "okay", "yep", "yes"}:
+            return False
+        spoken = getattr(self, "_last_spoken_text", "")
+        if normalized != spoken:
+            return False
+        return time.time() - float(getattr(self, "_last_spoken_at", 0.0)) < 8.0
+
+    def start_codebase_agent_task(self, task: str, context: str = "", output_dir: str = "agent_monitor_mvp") -> bool:
         """Launch the Qwen codebase agent without blocking the active call."""
+        if getattr(self, "_codebase_agent_running", False):
+            print("[Voice Session] Codebase assistant already running; skipping duplicate launch")
+            return False
+        self._codebase_agent_running = True
         self._codebase_agent_started_at = time.time()
         self._codebase_agent_task = task or "Build this sketch into a working MVP"
         self._codebase_agent_context = context or ""
-        asyncio.create_task(self.execute_codebase_agent(self._codebase_agent_task, self._codebase_agent_context, output_dir))
+        asyncio.create_task(self._run_codebase_agent_task(self._codebase_agent_task, self._codebase_agent_context, output_dir))
+        return True
+
+    async def _run_codebase_agent_task(self, task: str, context: str, output_dir: str) -> None:
+        try:
+            await self.execute_codebase_agent(task, context, output_dir)
+        finally:
+            self._codebase_agent_running = False
 
     def hydrate_from_handoff_state(self, state: Dict[str, Any]) -> None:
         self.conversation_id = state.get("conversation_id") or self.conversation_id
@@ -963,6 +1045,7 @@ class VoiceSession:
             print(f"[Voice Session] stream_tts: text empty after cleaning")
             return
         
+        self.remember_spoken_text(text)
         print(f"[Voice Session] stream_tts: synthesizing '{text[:50]}...'")
         
         # Use provided voice or session default
@@ -1283,6 +1366,9 @@ class VoiceSession:
         """Process user message through LLM pipeline."""
         if not user_text or not user_text.strip():
             return
+        if self.is_recent_spoken_echo(user_text):
+            print(f"[Voice Session] Ignoring likely assistant echo: '{user_text}'")
+            return
         
         # Add user message to history
         self.conversation_history.append({"role": "user", "content": user_text})
@@ -1299,7 +1385,10 @@ class VoiceSession:
         final_response = ""
         chunk_count = 0
         raw_chunks = []
+        live_qwen_started = False
         try:
+            _mark_live_qwen_start(f"{self.session_id}:text_llm")
+            live_qwen_started = True
             # Get enabled tools for this session
             enabled_tool_defs = _filter_for_demo(get_enabled_tools(self.enabled_tools))
             print(f"[Voice Session] Starting LLM stream with {len(messages_for_llm)} messages")
@@ -1743,6 +1832,9 @@ CRITICAL INSTRUCTIONS:
             traceback.print_exc()
             await self.send_message("error", {"error": f"LLM streaming error: {e}"})
             return
+        finally:
+            if live_qwen_started:
+                _mark_live_qwen_done(f"{self.session_id}:text_llm")
         
         # Extract final channel
         if not final_response or not final_response.strip():
@@ -2070,7 +2162,34 @@ CRITICAL INSTRUCTIONS:
             {"role": "user", "content": prompt},
         ]
         timeout_s = int(os.environ.get("QWEN_CODEBASE_TIMEOUT", "360"))
-        response = await asyncio.wait_for(agent_llm.complete(messages), timeout=timeout_s)
+        max_interrupts = int(os.environ.get("QWEN_CODEBASE_MAX_INTERRUPTS", "12"))
+        interruptions = 0
+        while True:
+            await _wait_for_codebase_qwen_slot()
+            request_task = asyncio.create_task(agent_llm.complete(messages))
+            codebase_qwen_requests.add(request_task)
+            try:
+                response = await asyncio.wait_for(request_task, timeout=timeout_s)
+                break
+            except asyncio.CancelledError:
+                codebase_qwen_requests.discard(request_task)
+                if getattr(asyncio.current_task(), "cancelling", lambda: 0)():
+                    if not request_task.done():
+                        request_task.cancel()
+                    raise
+                interruptions += 1
+                if interruptions > max_interrupts:
+                    raise RuntimeError(
+                        f"Codebase Qwen request was interrupted by live conversation {interruptions} times"
+                    )
+                print(
+                    f"[Qwen Scheduler] codebase attempt {attempt} interrupted by live turn; "
+                    f"retrying when idle ({interruptions}/{max_interrupts})"
+                )
+                await asyncio.sleep(min(0.5 * interruptions, 2.0))
+                continue
+            finally:
+                codebase_qwen_requests.discard(request_task)
         response = agent_llm._extract_final_channel(response or "").strip()
         (run_dir / f"qwen_attempt_{attempt}_response.txt").write_text(response + "\n", encoding="utf-8")
         return response
@@ -2650,6 +2769,25 @@ const mobilePath = {json.dumps(str(mobile_path))};
         if any(term in lower for term in visual_terms) and any(term in lower for term in build_terms):
             return True
         return "mvp" in lower and any(term in lower for term in ("build", "implement", "convert", "turn this", "working app"))
+
+    def is_camera_check_request(self, text: str) -> bool:
+        """Detect the demo cold-open camera/audio check without invoking Qwen."""
+        lower = " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+        if not lower:
+            return False
+        if any(phrase in lower for phrase in ("turn camera", "flip camera", "switch camera", "rotate camera")):
+            return False
+        camera_phrases = (
+            "am i on camera",
+            "am i visible",
+            "can you see me",
+            "do you see me",
+            "camera on",
+            "camera working",
+        )
+        if any(phrase in lower for phrase in camera_phrases):
+            return True
+        return lower in {"camera", "on camera"}
 
     def is_incomplete_codebase_fragment(self, text: str) -> bool:
         """Detect ASR fragments that likely precede 'this sketch/diagram into an MVP'."""
@@ -3840,6 +3978,10 @@ async def voice_call(websocket: WebSocket):
                                 print("[Voice Call] Empty transcription, skipping")
                                 await session.send_message("asr_result", {"text": ""})
                                 continue
+                            if session.is_recent_spoken_echo(transcription):
+                                print(f"[Voice Call] Ignoring likely assistant echo: '{transcription}'")
+                                await session.send_message("asr_result", {"text": ""})
+                                continue
 
                             # Send final ASR result to frontend
                             await session.send_message("asr_result", {"text": transcription})
@@ -3920,6 +4062,10 @@ async def voice_call(websocket: WebSocket):
                                 print("[Video Call] Empty transcription, skipping")
                                 await session.send_message("asr_result", {"text": ""})
                                 continue
+                            if session.is_recent_spoken_echo(transcription):
+                                print(f"[Video Call] Ignoring likely assistant echo: '{transcription}'")
+                                await session.send_message("asr_result", {"text": ""})
+                                continue
 
                             # Send final ASR result to frontend
                             await session.send_message("asr_result", {"text": transcription})
@@ -3951,6 +4097,17 @@ async def voice_call(websocket: WebSocket):
 
                                 if session.is_workspace_update_request(intent_text):
                                     await session.handle_workspace_update_request(intent_text)
+                                    continue
+
+                                if session.is_camera_check_request(intent_text):
+                                    response_text = "Yep. You're on camera, audio is clear, and I'm ready."
+                                    await session.send_message("llm_final", {"text": response_text})
+                                    await session.stream_tts(response_text)
+                                    session.conversation_history.append({
+                                        "role": "assistant",
+                                        "content": response_text,
+                                    })
+                                    session.publish_handoff_state()
                                     continue
 
                                 # Face recognition - recognize people in frame
@@ -4014,13 +4171,17 @@ async def voice_call(websocket: WebSocket):
                                 # Use streaming if no tools enabled, otherwise use non-streaming for tool support
                                 if enabled_tool_defs:
                                     # Non-streaming mode with tool support
-                                    vlm_result = await vlm.analyze_image(
-                                        image_b64,
-                                        intent_text,
-                                        system_prompt=system_prompt,
-                                        tools=enabled_tool_defs,
-                                        history=recent_history
-                                    )
+                                    _mark_live_qwen_start(f"{session.session_id}:video_vlm")
+                                    try:
+                                        vlm_result = await vlm.analyze_image(
+                                            image_b64,
+                                            intent_text,
+                                            system_prompt=system_prompt,
+                                            tools=enabled_tool_defs,
+                                            history=recent_history
+                                        )
+                                    finally:
+                                        _mark_live_qwen_done(f"{session.session_id}:video_vlm")
                                     vlm_elapsed = (time.perf_counter() - vlm_start) * 1000
 
                                     response_text = vlm_result.get("content", "")
@@ -4102,32 +4263,36 @@ async def voice_call(websocket: WebSocket):
                                                 if not session.alive:
                                                     return
                                                 next_calls = None
-                                                async for chunk in llm.stream_complete(
-                                                    list(session.conversation_history),
-                                                    tools=enabled_tool_defs if enabled_tool_defs else None,
-                                                ):
-                                                    if not session.alive:
-                                                        return
-                                                    if not chunk.startswith("data: "):
-                                                        continue
-                                                    try:
-                                                        d = json.loads(chunk[6:])
-                                                    except json.JSONDecodeError:
-                                                        continue
-                                                    if "tool_calls_complete" in d:
-                                                        next_calls = d["tool_calls_complete"]
-                                                        break
-                                                    if "content" in d and d["content"]:
-                                                        piece = d["content"]
-                                                        synth_text += piece
-                                                        sb += piece
-                                                        sents, sb = session._extract_complete_sentences(sb)
-                                                        for s in sents:
-                                                            s = s.strip()
-                                                            if s:
-                                                                # Serial: see server.py agent-loop note above.
-                                                                await session.stream_tts(s)
-                                                                progressive = True
+                                                _mark_live_qwen_start(f"{session.session_id}:video_tool_followup")
+                                                try:
+                                                    async for chunk in llm.stream_complete(
+                                                        list(session.conversation_history),
+                                                        tools=enabled_tool_defs if enabled_tool_defs else None,
+                                                    ):
+                                                        if not session.alive:
+                                                            return
+                                                        if not chunk.startswith("data: "):
+                                                            continue
+                                                        try:
+                                                            d = json.loads(chunk[6:])
+                                                        except json.JSONDecodeError:
+                                                            continue
+                                                        if "tool_calls_complete" in d:
+                                                            next_calls = d["tool_calls_complete"]
+                                                            break
+                                                        if "content" in d and d["content"]:
+                                                            piece = d["content"]
+                                                            synth_text += piece
+                                                            sb += piece
+                                                            sents, sb = session._extract_complete_sentences(sb)
+                                                            for s in sents:
+                                                                s = s.strip()
+                                                                if s:
+                                                                    # Serial: see server.py agent-loop note above.
+                                                                    await session.stream_tts(s)
+                                                                    progressive = True
+                                                finally:
+                                                    _mark_live_qwen_done(f"{session.session_id}:video_tool_followup")
                                                 if not next_calls:
                                                     break
                                                 await session.send_message("tool_invocation", {"message": "One moment…"})
@@ -4177,15 +4342,19 @@ async def voice_call(websocket: WebSocket):
                                     # Streaming mode (no tools) - stream text to UI as it arrives
                                     print("[Video Call] Using streaming VLM (no tools)")
                                     response_text = ""
-                                    async for chunk in vlm.stream_analyze_image(
-                                        image_b64,
-                                        intent_text,
-                                        system_prompt=system_prompt,
-                                        history=recent_history
-                                    ):
-                                        response_text += chunk
-                                        # Send chunk to frontend for live display
-                                        await session.send_message("transient_response", {"text": response_text})
+                                    _mark_live_qwen_start(f"{session.session_id}:video_vlm_stream")
+                                    try:
+                                        async for chunk in vlm.stream_analyze_image(
+                                            image_b64,
+                                            intent_text,
+                                            system_prompt=system_prompt,
+                                            history=recent_history
+                                        ):
+                                            response_text += chunk
+                                            # Send chunk to frontend for live display
+                                            await session.send_message("transient_response", {"text": response_text})
+                                    finally:
+                                        _mark_live_qwen_done(f"{session.session_id}:video_vlm_stream")
 
                                     vlm_elapsed = (time.perf_counter() - vlm_start) * 1000
                                     print(f"[Video Call] ⏱️ VLM Stream: {vlm_elapsed:.0f}ms → {len(response_text)} chars")
