@@ -1,4 +1,17 @@
 **Feature: Computex demo beat refresh**
+**Test #4: Whiteboard image prompt E2E**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python bench/test_whiteboard_image_prompt.py`
+**Result**:
+```bash
+whiteboard image prompt e2e: image=/home/nvidia/selena/projects/spark-realtime-chatbot/test_assets/agent_workbench_whiteboard.png
+Visual readback: PASS
+MVP brief routing: PASS
+whiteboard image prompt e2e: PASS
+```
+**Coverage:** Generates a local whiteboard-style Agent Monitoring MVP sketch with Agent Monitor UI, Agent Dashboard FastAPI backend, Task History database, and Activity Feed. Sends the actual PNG to the VLM, verifies visual component readback, then verifies the demo prompt routes "turn this sketch into an MVP" to `markdown_assistant` with `mvp_brief.md` context.
+
+**Feature: Computex demo beat refresh**
 **Test #1: Live Computex prompt E2E with wording variants**
 **Status:** PASS
 **Code Command**: `.venv-gpu/bin/python bench/test_demo_prompts.py`

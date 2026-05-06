@@ -23,6 +23,7 @@ Replaced the active hard-coded demo beats with the Computex flow: realtime camer
 ### Test Status
 
 - Live Computex prompt E2E with wording variants: **PASS**.
+- Whiteboard image prompt E2E: **PASS**.
 - Deterministic Computex workspace routing: **PASS**.
 - Python syntax checks: **PASS**.
 - Frontend JS syntax check: **PASS**.

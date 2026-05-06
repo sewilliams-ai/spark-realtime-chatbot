@@ -90,3 +90,15 @@ static/js/app.js`, `.venv-gpu/bin/python bench/test_computex_workspace.py`,
 bench/test_demo_prompts.py`, and `git diff --check`; all passed after tightening
 the menu test harness to accept any visible less-ideal menu item with a
 food-language reason. Closeout commit: `2192ba9`.
+
+## Session 2026-05-06 - whiteboard image prompt iteration
+
+Added `bench/test_whiteboard_image_prompt.py`, which generates a local
+whiteboard-style Agent Monitoring MVP diagram in ignored `test_assets/`, sends
+the actual PNG to the local VLM for visual readback, and verifies the Computex
+Beat 1 prompt routes the sketch to `markdown_assistant` with `mvp_brief.md`.
+The tested diagram uses the user's preferred Agent Monitor UI, Agent Dashboard
+FastAPI backend, Task History database, and Activity Feed structure. Tests run:
+`.venv-gpu/bin/python -m py_compile bench/test_whiteboard_image_prompt.py`,
+`.venv-gpu/bin/python bench/test_whiteboard_image_prompt.py`, and `git diff
+--check`; all passed.
