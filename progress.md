@@ -97,3 +97,11 @@ uploaded HEIC sketch to ignored `test_assets/IMG_3324.png`, verified VLM
 readback and routing, then ran a real simple-sketch MVP build: **PASS** on
 attempt 1 in **73.6 seconds**, evidence saved at
 `test_assets/mvp-generation-runs/20260506-203314/`.
+
+Fixed the Beat 1/Beat 3 routing collision exposed by manual E2E testing. The
+phrase "going to dinner" no longer triggers `workspace_update_assistant` when
+the same request contains sketch/MVP/build/convert language. The intended Beat
+1 script and the ASR variant "convert this sketch to an MVP ... briefer review"
+both route to `codebase_assistant` with the actual `IMG_3324.png` sketch. The
+codebase assistant now speaks only "On it." by default and leaves completion
+details in chat/workspace so later beats are not interrupted.

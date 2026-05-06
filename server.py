@@ -1277,13 +1277,13 @@ class VoiceSession:
                                         feedback_msg = "Let me think through this..."
                                         break
                                     if tc.get("function", {}).get("name") == "workspace_update_assistant":
-                                        feedback_msg = "Drafting the team update now."
+                                        feedback_msg = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
                                         break
                                     if tc.get("function", {}).get("name") == "html_assistant":
                                         feedback_msg = "On it. I'll build the prototype."
                                         break
                                     if tc.get("function", {}).get("name") == "codebase_assistant":
-                                        feedback_msg = "On it. I'll start the coding agent and save the evaluation artifacts."
+                                        feedback_msg = "On it."
                                         break
                                 else:
                                     feedback_msg = "On it."
@@ -2542,9 +2542,32 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 project_tasks.append(todo)
         return project_tasks, personal_tasks
 
+    def is_codebase_build_request(self, text: str) -> bool:
+        """Detect sketch-to-MVP build requests that must not route as dinner updates."""
+        lower = " ".join((text or "").lower().split())
+        visual_terms = ("sketch", "diagram", "whiteboard", "wireframe", "drawing", "image")
+        build_terms = (
+            "turn",
+            "convert",
+            "build",
+            "implement",
+            "create",
+            "make",
+            "mvp",
+            "app",
+            "dashboard",
+            "codebase",
+            "system",
+        )
+        if any(term in lower for term in visual_terms) and any(term in lower for term in build_terms):
+            return True
+        return "mvp" in lower and any(term in lower for term in ("build", "implement", "convert", "turn this", "working app"))
+
     def is_workspace_update_request(self, text: str) -> bool:
         """Detect Computex executive-update commands before the VLM tool roundtrip."""
         lower = " ".join((text or "").lower().split())
+        if self.is_codebase_build_request(lower):
+            return False
         direct_phrases = (
             "update my team",
             "send this update out to my team",
@@ -2840,7 +2863,8 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 "preview_path": preview_info.get("preview_path", ""),
                 "preview_url": preview_info.get("preview_url", ""),
             })
-            await self.stream_tts(summary)
+            if os.environ.get("CODEBASE_AGENT_SPOKEN_COMPLETE", "").lower() in ("1", "true", "yes", "on"):
+                await self.stream_tts(summary)
         except asyncio.TimeoutError:
             msg = "The coding agent timed out; I saved the run folder for inspection if it was created."
             print(f"[Voice Session] Codebase agent timeout")
@@ -3554,7 +3578,7 @@ async def voice_call(websocket: WebSocket):
                                 print(f"[Video Call] Image: {len(image_b64)} chars base64")
 
                                 if session.is_workspace_update_request(transcription):
-                                    ack = "Drafting the team update now. You got him pineapple cakes last year; maybe try high mountain oolong tea this time."
+                                    ack = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
                                     await session.send_message("tool_invocation", {"message": ack})
                                     await session.stream_tts(ack, is_transient=True)
                                     await session.execute_workspace_update_agent(
@@ -3661,9 +3685,9 @@ async def voice_call(websocket: WebSocket):
                                                 "workspace_update_assistant",
                                             ):
                                                 if tool_name == "workspace_update_assistant":
-                                                    ack = "Drafting the team update now."
+                                                    ack = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
                                                 elif tool_name == "codebase_assistant":
-                                                    ack = "On it. I'll start the coding agent and save the evaluation artifacts."
+                                                    ack = "On it."
                                                 else:
                                                     ack = "On it."
                                                 await session.stream_tts(ack, is_transient=True)

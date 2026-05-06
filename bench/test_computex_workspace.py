@@ -126,6 +126,12 @@ ignored
             "Assign action items and save a todo to buy pineapple cakes for my husband."
         )
         assert session.is_workspace_update_request(request)
+        sketch_request = (
+            "Please convert this sketch to an MVP. "
+            "I'm going to dinner, write me a briefer review when I get back."
+        )
+        assert session.is_codebase_build_request(sketch_request)
+        assert not session.is_workspace_update_request(sketch_request)
         assert not session.is_workspace_update_request("Add these to the project")
 
         todos = session.extract_workspace_todos("Update my team", request, [])

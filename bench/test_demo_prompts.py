@@ -153,6 +153,14 @@ def test_cold_open_variants(url, model):
 def test_codebase_build_variants(url, model):
     variants = [
         (
+            "Hey Claw, please turn this sketch into an MVP. "
+            "I'm going to dinner, write me a brief to review for when I get back."
+        ),
+        (
+            "Please convert this sketch to an MVP. "
+            "I'm going to dinner, write me a briefer review when I get back."
+        ),
+        (
             "Visible sketch: Agent Workbench dashboard with Project Brief, Agent Status, "
             "Action Items, and Activity Feed panels. Turn this sketch into an MVP. "
             "I'm going to dinner; write me a brief for when I get back."
