@@ -12,7 +12,7 @@
 
 Added the Beat 1 agentic build path: when Spark sees the Agent Monitor
 whiteboard and the user asks to build or turn it into an MVP, it routes to a
-constrained local coding-agent workflow that creates a runnable ignored
+constrained local-Qwen coding workflow that creates a runnable ignored
 workspace app plus `mvp_brief.md`, then evaluates it with browser evidence.
 Brief-only/documentation requests still route to `markdown_assistant`.
 
@@ -21,10 +21,19 @@ Brief-only/documentation requests still route to `markdown_assistant`.
 - `tools.py` adds `codebase_assistant` as a UI-agent sentinel.
 - `prompts.py` distinguishes build requests from brief-only requests and keeps
   executive-assistant gift todos from being dropped.
-- `server.py` constrains generated MVPs to `workspace/*_mvp/`, tries OpenClaw
-  first, falls back to noninteractive Codex CLI when OpenClaw produces no app
-  files, prunes generated planning/config artifacts, runs one repair pass on
-  browser failure, and saves local evidence under `test_assets/mvp-generation-runs/`.
+- `server.py` constrains generated MVPs to `workspace/*_mvp/`, calls local
+  Qwen through `LlamaCppClient`, parses three allowed file blocks, prunes
+  generated planning/config artifacts, runs bounded Qwen repair attempts on
+  validation/browser failure, and saves local evidence under
+  `test_assets/mvp-generation-runs/`.
+- `server.py` also starts successful generated MVPs on a private localhost
+  port and proxies them through the current Spark origin at
+  `/generated/<workspace-slug>/`, rewriting absolute generated-app API paths
+  so the live demo can open the MVP from the same app URL.
+- The reliability prompt intentionally embeds small HTML/CSS/JS inside
+  `app.py` instead of allowing separate frontend files. This is a demo
+  reliability choice, not a general objection to HTML/JS files; a fourth
+  `index.html` file can be supported later by explicitly whitelisting it.
 - `static/index.html` and `static/js/app.js` expose the checked Codebase
   Assistant option and render completion details.
 - `.gitignore` now excludes generated `workspace/*_mvp/` app folders.
@@ -41,15 +50,21 @@ Brief-only/documentation requests still route to `markdown_assistant`.
 - Live Computex prompt E2E with build, brief, menu, and executive variants:
   **PASS**.
 - Whiteboard image prompt E2E: **PASS**.
-- Real generated MVP workflow: **PASS** via Codex fallback and repair.
-- Browser evaluation: **PASS** with desktop/mobile screenshots and no mobile
-  horizontal overflow.
+- Real generated MVP workflow: **PASS** via local Qwen.
+- Qwen codebase stress test: **10/10 PASS**. Min/mean/median/max generation
+  and evaluation time: **48.0 / 64.7 / 58.4 / 114.8 seconds**.
+- Browser evaluation: **PASS** with desktop/mobile screenshots, required
+  dashboard structure, static checks, and no browser/page errors.
+- Live preview proxy: **PASS** via local-Qwen generation plus same-origin
+  `/generated/agent_monitor_preview_mvp/` route.
 - Handoff helper smoke: **PASS**.
 
 ### Local Evidence
 
 - Generated MVP: `workspace/agent_monitor_mvp/` (ignored).
-- Final evidence folder: `test_assets/mvp-generation-runs/20260506-173640/`
+- Latest preview evidence folder: `test_assets/mvp-generation-runs/20260506-195908/`
+  (ignored).
+- Final stress evidence folder: `test_assets/mvp-generation-runs/stress-20260506-194555/`
   (ignored).
 - Screenshots: `desktop.png`, `mobile.png`.
 

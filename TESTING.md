@@ -1,3 +1,37 @@
+**Feature: Qwen codebase assistant**
+**Test #0: Live preview proxy smoke**
+**Status:** PASS
+**Code Command**: `QWEN_CODEBASE_ATTEMPTS=3 .venv-gpu/bin/python - <<'PY' ... VoiceSession.execute_codebase_agent + TestClient GET /generated/agent_monitor_preview_mvp/ ... PY`
+**Result**:
+```bash
+PREVIEW_TEST_PASS {"browser_status": "PASS", "codebase_path": "workspace/agent_monitor_preview_mvp", "elapsed_seconds": 67.9, "preview_path": "/generated/agent_monitor_preview_mvp/", "preview_status": "PASS", "preview_url": "https://localhost:8443/generated/agent_monitor_preview_mvp/", "run_dir": "test_assets/mvp-generation-runs/20260506-195908"}
+```
+**Coverage:** Runs the real local-Qwen `codebase_assistant`, verifies the generated MVP passes browser evaluation, starts the generated FastAPI app behind Spark's `/generated/<slug>/` same-origin preview proxy, verifies the proxied HTML and `/api/tasks` route through FastAPI `TestClient`, and saves desktop/mobile screenshots at `test_assets/mvp-generation-runs/20260506-195908/`.
+
+**Feature: Qwen codebase assistant**
+**Test #1: 10-run MVP generation stress test**
+**Status:** PASS
+**Code Command**: `QWEN_CODEBASE_ATTEMPTS=2 QWEN_CODEBASE_TIMEOUT=115 QWEN_CODEBASE_MAX_TOKENS=6000 QWEN_CODEBASE_REASONING=none .venv-gpu/bin/python - <<'PY' ... VoiceSession.execute_codebase_agent 10x ... PY`
+**Result**:
+```bash
+Runs: 10
+Passed: 10
+Pass rate: 100%
+Min/mean/median/max seconds: 48.0 / 64.7 / 58.4 / 114.8
+```
+**Coverage:** Runs ten wording variants through the local-Qwen `codebase_assistant`, each writing an ignored `workspace/agent_monitor_stress4_*_mvp/` app. Success requires the three expected files, Python/JSON/brief checks, browser startup, required dashboard structure, at least two interactive controls, no browser/page errors, desktop/mobile screenshots, and total generation/evaluation time under 120 seconds. Evidence is saved at `test_assets/mvp-generation-runs/stress-20260506-194555/`.
+
+**Feature: Qwen codebase assistant**
+**Test #2: Speed smoke**
+**Status:** PASS
+**Code Command**: `QWEN_CODEBASE_ATTEMPTS=2 QWEN_CODEBASE_TIMEOUT=115 QWEN_CODEBASE_MAX_TOKENS=6000 QWEN_CODEBASE_REASONING=none .venv-gpu/bin/python - <<'PY' ... VoiceSession.execute_codebase_agent once ... PY`
+**Result**:
+```bash
+ELAPSED 55.0
+Browser evaluation: PASS
+```
+**Coverage:** Verifies the fast reliability prompt can generate a runnable Agent Monitor MVP on the first attempt under one minute. Evidence is saved at `test_assets/mvp-generation-runs/20260506-185607/`.
+
 **Feature: Computex demo beat refresh**
 **Test #4: Whiteboard image prompt E2E**
 **Status:** PASS
@@ -6,10 +40,11 @@
 ```bash
 whiteboard image prompt e2e: image=/home/nvidia/selena/projects/spark-realtime-chatbot/test_assets/agent_workbench_whiteboard.png
 Visual readback: PASS
-MVP brief routing: PASS
+MVP codebase routing: PASS
+MVP brief-only routing: PASS
 whiteboard image prompt e2e: PASS
 ```
-**Coverage:** Generates a local whiteboard-style Agent Monitoring MVP sketch with Agent Monitor UI, Agent Dashboard FastAPI backend, Task History database, and Activity Feed. Sends the actual PNG to the VLM, verifies visual component readback, then verifies the demo prompt routes "turn this sketch into an MVP" to `markdown_assistant` with `mvp_brief.md` context.
+**Coverage:** Generates a local whiteboard-style Agent Monitoring MVP sketch with Agent Monitor UI, Agent Dashboard FastAPI backend, Task History database, and Activity Feed. Sends the actual PNG to the VLM, verifies visual component readback, verifies "turn this sketch into an MVP" routes to `codebase_assistant`, and verifies brief-only wording still routes to `markdown_assistant` with `mvp_brief.md` context.
 
 **Feature: Computex demo beat refresh**
 **Test #1: Live Computex prompt E2E with wording variants**
@@ -22,6 +57,9 @@ Static prompt absence: PASS
 Cold open variant 1: PASS
 Cold open variant 2: PASS
 Cold open variant 3: PASS
+Beat 1 codebase build variant 1: PASS
+Beat 1 codebase build variant 2: PASS
+Beat 1 codebase build variant 3: PASS
 Beat 1 MVP brief variant 1: PASS
 Beat 1 MVP brief variant 2: PASS
 Beat 1 MVP brief variant 3: PASS
@@ -34,7 +72,7 @@ Beat 3 executive update variant 2: PASS
 Beat 3 executive update variant 3: PASS
 computex demo prompt e2e: PASS
 ```
-**Coverage:** Verifies the current Computex flow: cold open, Agent Workbench MVP brief/scaffold routing, explicit HTML prototype routing, private health menu recommendations without spoken sensitive labels or raw digits, executive update routing, gift-memory grounding, and absence of old fashion/Redis/umbrella prompt strings. Older demo prompt entries below are historical and superseded by this suite.
+**Coverage:** Verifies the current Computex flow: cold open, Agent Workbench codebase-build routing, MVP brief/scaffold routing, explicit HTML prototype routing, private health menu recommendations without spoken sensitive labels or raw digits, executive update routing, gift-memory grounding, and absence of old fashion/Redis/umbrella prompt strings. Older demo prompt entries below are historical and superseded by this suite.
 
 **Feature: Computex demo beat refresh**
 **Test #2: Deterministic workspace routing**
@@ -44,7 +82,7 @@ computex demo prompt e2e: PASS
 ```bash
 computex workspace routing: PASS
 ```
-**Coverage:** Confirms `html_assistant` is exposed, `workspace_update_assistant` remains an agent tool, MVP/team markdown path inference works, `is_workspace_update_request()` accepts the new executive-update script, the old bare "Add these to the project" script no longer triggers workspace writes, and generated workspace sections use `spark-computex-*` markers without old Beat 4 artifacts.
+**Coverage:** Confirms `codebase_assistant` uses the local-Qwen file-block workflow, `html_assistant` is exposed, `workspace_update_assistant` remains an agent tool, MVP/team markdown path inference works, `is_workspace_update_request()` accepts the new executive-update script, the old bare "Add these to the project" script no longer triggers workspace writes, and generated workspace sections use `spark-computex-*` markers without old Beat 4 artifacts.
 
 **Feature: Computex demo beat refresh**
 **Test #3: Syntax, JS, and whitespace checks**

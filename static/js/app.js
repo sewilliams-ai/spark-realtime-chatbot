@@ -3262,6 +3262,22 @@ async function handleMessage(data) {
         "assistant",
         codebaseList ? `${codebaseSummary}\n\n${codebaseList}` : codebaseSummary
       );
+      const previewPath = data.preview_path || (data.preview && data.preview.preview_path) || "";
+      const previewUrl = data.preview_url || (data.preview && data.preview.preview_url) || "";
+      const previewHref = previewPath ? new URL(previewPath, window.location.origin).toString() : previewUrl;
+      if (previewHref) {
+        const breakEl = document.createElement("br");
+        const linkEl = document.createElement("a");
+        linkEl.href = previewHref;
+        linkEl.target = "_blank";
+        linkEl.rel = "noopener";
+        linkEl.textContent = "Open live MVP";
+        linkEl.style.display = "inline-block";
+        linkEl.style.marginTop = "0.65rem";
+        linkEl.style.fontWeight = "600";
+        codebaseMsg.content.appendChild(breakEl);
+        codebaseMsg.content.appendChild(linkEl);
+      }
       getActiveConversationEl().appendChild(codebaseMsg.container);
       scrollToBottom();
       saveCurrentChat();

@@ -17,9 +17,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import aiohttp
 import numpy as np
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
@@ -95,6 +96,7 @@ HANDOFF_CONTENT_LIMIT = 4000
 
 conversation_states: Dict[str, Dict[str, Any]] = {}
 active_conversation_sessions: Dict[str, "VoiceSession"] = {}
+codebase_preview_processes: Dict[str, Dict[str, Any]] = {}
 
 
 def _new_conversation_id() -> str:
@@ -196,6 +198,61 @@ def _get_handoff_candidate(conversation_id: str, device_type: str) -> Optional[D
     return max(candidates, key=lambda state: float(state.get("updated_at", 0)))
 
 
+def _codebase_preview_public_base() -> str:
+    """Best-effort external base URL for generated MVP preview links."""
+    base = (
+        os.environ.get("SPARK_PUBLIC_BASE_URL")
+        or os.environ.get("APP_PUBLIC_URL")
+        or os.environ.get("PUBLIC_BASE_URL")
+        or "https://localhost:8443"
+    )
+    return base.rstrip("/")
+
+
+def _codebase_preview_path(slug: str) -> str:
+    return f"/generated/{slug}/"
+
+
+def _codebase_preview_url(slug: str) -> str:
+    return f"{_codebase_preview_public_base()}{_codebase_preview_path(slug)}"
+
+
+def _rewrite_codebase_preview_content(content: bytes, content_type: str, slug: str) -> bytes:
+    """Rewrite generated-app absolute API paths so they work behind Spark's proxy."""
+    lower_type = (content_type or "").lower()
+    if not any(kind in lower_type for kind in ("text/html", "javascript", "ecmascript", "text/css")):
+        return content
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+    prefix = f"/generated/{slug}/api/"
+    text = text.replace('"/api/', f'"{prefix}')
+    text = text.replace("'/api/", f"'{prefix}")
+    text = text.replace("`/api/", f"`{prefix}")
+    text = text.replace("=/api/", f"={prefix}")
+    return text.encode("utf-8")
+
+
+async def _stop_codebase_preview(slug: str) -> None:
+    """Stop a generated MVP preview process for one workspace slug."""
+    preview = codebase_preview_processes.pop(slug, None)
+    proc = preview.get("process") if preview else None
+    if not proc or proc.returncode is not None:
+        return
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+
+
+async def _stop_all_codebase_previews() -> None:
+    for slug in list(codebase_preview_processes):
+        await _stop_codebase_preview(slug)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize models on startup."""
@@ -222,6 +279,7 @@ async def lifespan(app: FastAPI):
     llm = LlamaCppClient(LLMConfig())
     tts = create_tts(TTSConfig())
     yield
+    await _stop_all_codebase_previews()
     # Cleanup: close shared HTTP session
     if http_manager:
         await http_manager.close()
@@ -257,6 +315,80 @@ app.mount("/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 async def health_check():
     """Health check endpoint for Docker."""
     return {"status": "ok"}
+
+
+@app.get("/generated/{slug}")
+async def generated_preview_root(slug: str):
+    """Normalize generated MVP preview URLs to the proxied app root."""
+    return RedirectResponse(_codebase_preview_path(slug))
+
+
+@app.api_route(
+    "/generated/{slug}/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+async def generated_preview_proxy(slug: str, path: str, request: Request):
+    """Proxy a generated Qwen MVP through the main Spark origin."""
+    preview = codebase_preview_processes.get(slug)
+    proc = preview.get("process") if preview else None
+    if not preview or not proc or proc.returncode is not None:
+        return JSONResponse(
+            {"error": "Generated MVP preview is not running", "slug": slug},
+            status_code=404,
+        )
+
+    port = int(preview["port"])
+    upstream_path = (path or "").lstrip("/")
+    upstream_url = f"http://127.0.0.1:{port}/{upstream_path}"
+    if request.url.query:
+        upstream_url += f"?{request.url.query}"
+
+    excluded_headers = {
+        "connection",
+        "content-length",
+        "host",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+    request_headers = {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() not in excluded_headers
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.request(
+                request.method,
+                upstream_url,
+                headers=request_headers,
+                data=await request.body(),
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as upstream:
+                body = await upstream.read()
+                content_type = upstream.headers.get("content-type", "")
+                body = _rewrite_codebase_preview_content(body, content_type, slug)
+                response_headers = {
+                    key: value
+                    for key, value in upstream.headers.items()
+                    if key.lower() not in excluded_headers and key.lower() != "content-encoding"
+                }
+                location = response_headers.get("location")
+                if location and location.startswith("/"):
+                    response_headers["location"] = f"/generated/{slug}{location}"
+                response_headers.pop("content-length", None)
+                return Response(content=body, status_code=upstream.status, headers=response_headers)
+    except Exception as exc:
+        return JSONResponse(
+            {"error": f"Generated MVP preview proxy failed: {exc}", "slug": slug},
+            status_code=502,
+        )
 
 
 @app.get("/api/default_prompt")
@@ -1642,81 +1774,82 @@ CRITICAL INSTRUCTIONS:
         run_dir.mkdir(parents=True, exist_ok=True)
         return run_dir
 
-    def find_openclaw_binary(self) -> Optional[str]:
-        """Find the OpenClaw executable used for coding sub-agent turns."""
-        candidates = [
-            os.environ.get("OPENCLAW_BIN"),
-            "openclaw",
-            "/home/nvidia/.nvm/versions/node/v22.22.2/bin/openclaw",
-            "/home/nvidia/.nvm/versions/node/v22.22.1/bin/openclaw",
-            "/home/nvidia/selena/vdrs/NeMo-Flow/third_party/openclaw/openclaw.mjs",
-            "/usr/local/bin/openclaw",
-        ]
-        for candidate in candidates:
-            if not candidate:
-                continue
-            if "/" not in candidate:
-                from shutil import which
-                found = which(candidate)
-                if found:
-                    return found
-                continue
-            path = Path(candidate)
-            if path.exists() and os.access(path, os.X_OK):
-                return str(path)
-        return None
+    def build_codebase_agent_prompt(
+        self,
+        task: str,
+        context: str,
+        output_dir: Path,
+        run_dir: Path,
+        previous_error: str = "",
+        existing_files: str = "",
+    ) -> str:
+        """Build the constrained prompt for the local Qwen coding sub-agent."""
+        repair_context = ""
+        if previous_error:
+            repair_context = "\n".join([
+                "",
+                "Repair context from the previous attempt:",
+                previous_error.strip(),
+                "",
+                "Current generated files:",
+                existing_files.strip() or "(no usable files yet)",
+                "",
+                "Return a complete replacement for all three required files, not a diff.",
+            ])
 
-    def find_codex_binary(self) -> Optional[str]:
-        """Find a noninteractive Codex CLI fallback for codebase generation."""
-        candidates = [
-            os.environ.get("CODEX_BIN"),
-            "codex",
-            "/home/nvidia/.nvm/versions/node/v22.22.2/bin/codex",
-            "/home/nvidia/.nvm/versions/node/v22.22.1/bin/codex",
-        ]
-        for candidate in candidates:
-            if not candidate:
-                continue
-            if "/" not in candidate:
-                from shutil import which
-                found = which(candidate)
-                if found:
-                    return found
-                continue
-            path = Path(candidate)
-            if path.exists() and os.access(path, os.X_OK):
-                return str(path)
-        return None
-
-    def build_codebase_agent_prompt(self, task: str, context: str, output_dir: Path, run_dir: Path) -> str:
-        """Build the constrained prompt for the local coding sub-agent."""
         return "\n".join([
-            "You are the coding sub-agent for Spark's Computex demo.",
+            "You are Qwen3.6, Spark's local coding sub-agent for the Computex demo.",
             "",
-            "Goal: build a high-quality local MVP from the user's visible diagram.",
+            "Goal: build a small working MVP from the user's visible diagram.",
+            "Reliability target: produce a complete first attempt quickly. Keep the app simple enough to generate in under two minutes.",
             "",
             "Hard boundaries:",
             f"- Work only inside this directory: {output_dir}",
             "- Do not edit the Spark realtime chatbot repo outside that directory.",
             "- Keep the generated workspace as flat and concise as possible.",
-            "- Prefer these files: app.py, task_history.json, mvp_brief.md.",
+            "- Output exactly these files: app.py, task_history.json, mvp_brief.md.",
             "- Do not create AGENTS.md, README.md, task_plan.md, findings.md, progress.md, .codex, or planning/config files.",
             "- If you need to record decisions, put them in mvp_brief.md.",
             "- Do not create frontend/, backend/, database/, node_modules/, or large asset folders.",
             "- Do not write secrets or private health data into the generated app.",
+            "- Do not delegate to another agent or mention external coding tools.",
             "",
             "Expected MVP:",
-            "- A polished operator dashboard UI for Agent Monitor / Agent Dashboard / Task History / Activity Feed.",
-            "- A FastAPI server that serves the UI and exposes JSON API endpoints.",
-            "- A local task-history persistence layer, preferably a single JSON file.",
+            "- A simple, reliable operator dashboard UI for Agent Monitor / Agent Dashboard / Task History / Activity Feed.",
+            "- A one-file FastAPI server that serves the UI and exposes JSON API endpoints.",
+            "- A local task-history persistence layer using the single JSON file.",
             "- A brief with core architecture decisions, data model, API surface, run command, risks, and next steps.",
+            "- Prefer a working, compact MVP over ambitious UI complexity.",
             "",
             "Design quality guidance:",
+            "- Build a simple 2026-quality operations dashboard, not a generic toy page.",
+            "- Keep it quiet, utilitarian, and readable, with clean spacing and typography.",
+            "- Avoid a one-note all-dark/all-blue palette; use neutral surfaces plus clear semantic accents.",
             "- Use semantic HTML, one h1, clear landmarks, visible focus states, and accessible contrast.",
             "- Define CSS tokens near the top of the UI.",
             "- Make desktop and mobile layouts intentional.",
             "- Include reduced-motion handling.",
             "- Avoid decorative bloat, nested card piles, and generic placeholder copy.",
+            "- Keep cards at 8px radius or less.",
+            "- The visible UI must include these literal section labels: Overview, Agent Status, Commands, Task History, Activity Feed.",
+            "- The Commands section must include at least two working buttons, such as New Task and Refresh.",
+            "- Mobile overflow must be impossible: use box-sizing border-box, max-width: 100%, overflow-x hidden on html/body, responsive grids, and wrapping table cells.",
+            "- Do not use an HTML table for Task History; use responsive div/list rows or cards so mobile cannot overflow.",
+            "",
+            "Implementation guidance:",
+            "- app.py should import cleanly and expose `app = FastAPI()`.",
+            "- app.py should embed the HTML/CSS/JS directly and serve it from `/`.",
+            "- Do not read `index.html` or any other UI file. The only file app.py may read/write is `task_history.json`.",
+            "- Include only these JSON endpoints: GET /api/tasks, POST /api/tasks, GET /api/stats.",
+            "- task_history.json must be valid JSON with 3 short seed task records so the first render is not empty.",
+            "- The Activity Feed should show at least two visible recent events on first render.",
+            "- If app.py uses `await request.json()`, the route function must be `async def`; never put await inside a regular def.",
+            "- Keep JavaScript minimal and conservative: no optional chaining, no object spread, no module syntax, and no complex template logic.",
+            "- Avoid stale hard-coded calendar dates in seed data; prefer runtime timestamps or current-day labels.",
+            "- mvp_brief.md must include a `## Architecture` section.",
+            "- Keep app.py compact, ideally under 180 lines; avoid WebSockets, background tasks, dataclasses, and complex abstractions.",
+            "- Keep mvp_brief.md concise, ideally under 45 lines.",
+            "- Use no external frontend libraries, no images, no package files, and no nested directories.",
             "",
             "Testing/evaluation guidance:",
             "- Run syntax/import checks for generated code.",
@@ -1724,12 +1857,125 @@ CRITICAL INSTRUCTIONS:
             "- Leave notes about any checks you ran in mvp_brief.md.",
             f"- Spark will also save local evaluation artifacts under: {run_dir}",
             "",
+            "Output format:",
+            "Return only these three file blocks. Do not wrap the whole answer in markdown fences.",
+            "<<<FILE: app.py>>>",
+            "# complete Python source here",
+            "<<<END FILE>>>",
+            "<<<FILE: task_history.json>>>",
+            "[]",
+            "<<<END FILE>>>",
+            "<<<FILE: mvp_brief.md>>>",
+            "# MVP Brief",
+            "## Architecture",
+            "Brief content here",
+            "<<<END FILE>>>",
+            repair_context,
+            "",
             "Visible diagram / user context:",
             context or "Agent Monitor UI -> Agent Dashboard FastAPI -> Task History database, plus Activity Feed.",
             "",
             "User request:",
             task or "Build this Agent Monitoring sketch into a working MVP.",
         ])
+
+    def summarize_codebase_file_contents(self, output_dir: Path, max_chars: int = 8000) -> str:
+        """Return compact snippets of generated files for a Qwen repair prompt."""
+        chunks = []
+        for name in ("app.py", "task_history.json", "mvp_brief.md"):
+            path = output_dir / name
+            if not path.exists() or not path.is_file():
+                chunks.append(f"--- {name}: missing ---")
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception as exc:
+                chunks.append(f"--- {name}: unreadable: {exc} ---")
+                continue
+            if len(text) > max_chars:
+                text = text[:max_chars] + "\n...(truncated)"
+            chunks.append(f"--- {name} ---\n{text}")
+        return "\n\n".join(chunks)
+
+    def parse_codebase_file_blocks(self, response: str) -> tuple[Dict[str, str], List[str]]:
+        """Parse Qwen file-block output into the allowed flat MVP files."""
+        import re
+
+        allowed = {"app.py", "task_history.json", "mvp_brief.md"}
+        files: Dict[str, str] = {}
+        errors: List[str] = []
+        text = (response or "").strip()
+
+        pattern = re.compile(
+            r"<<<FILE:\s*([^>\n]+?)\s*>>>\s*\n?(.*?)\n?<<<END FILE>>>",
+            re.DOTALL | re.IGNORECASE,
+        )
+        for match in pattern.finditer(text):
+            raw_name = match.group(1).strip().replace("\\", "/")
+            name = Path(raw_name).name
+            content = match.group(2)
+            if name not in allowed:
+                errors.append(f"ignored unsupported generated file: {raw_name}")
+                continue
+            files[name] = content.rstrip() + "\n"
+
+        missing = sorted(allowed - set(files))
+        if missing:
+            errors.append(f"missing required file block(s): {', '.join(missing)}")
+        return files, errors
+
+    def write_qwen_codebase_files(self, output_dir: Path, response: str) -> tuple[Dict[str, str], List[str]]:
+        """Write parsed Qwen file blocks into the generated workspace directory."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        files, errors = self.parse_codebase_file_blocks(response)
+        for name in ("app.py", "task_history.json", "mvp_brief.md"):
+            path = output_dir / name
+            if path.exists() and path.is_file():
+                path.unlink()
+        for name, content in files.items():
+            (output_dir / name).write_text(content, encoding="utf-8")
+        return self.summarize_codebase_files(output_dir), errors
+
+    async def run_qwen_codebase_turn(
+        self,
+        task: str,
+        context: str,
+        codebase_dir: Path,
+        run_dir: Path,
+        attempt: int,
+        previous_error: str = "",
+    ) -> str:
+        """Run one local-Qwen generation or repair turn for the codebase assistant."""
+        prompt = self.build_codebase_agent_prompt(
+            task,
+            context,
+            codebase_dir,
+            run_dir,
+            previous_error=previous_error,
+            existing_files=self.summarize_codebase_file_contents(codebase_dir),
+        )
+        (run_dir / f"qwen_attempt_{attempt}_prompt.md").write_text(prompt, encoding="utf-8")
+
+        cfg = LLMConfig()
+        cfg.temperature = float(os.environ.get("QWEN_CODEBASE_TEMP", "0.25"))
+        cfg.max_tokens = int(os.environ.get("QWEN_CODEBASE_MAX_TOKENS", "6000"))
+        cfg.reasoning_effort = os.environ.get("QWEN_CODEBASE_REASONING", "none")
+        agent_llm = LlamaCppClient(cfg)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a local code-generation assistant. Produce only the requested "
+                    "file blocks. Do not explain outside the file contents."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        timeout_s = int(os.environ.get("QWEN_CODEBASE_TIMEOUT", "360"))
+        response = await asyncio.wait_for(agent_llm.complete(messages), timeout=timeout_s)
+        response = agent_llm._extract_final_channel(response or "").strip()
+        (run_dir / f"qwen_attempt_{attempt}_response.txt").write_text(response + "\n", encoding="utf-8")
+        return response
 
     def summarize_codebase_files(self, output_dir: Path) -> Dict[str, str]:
         """Return a small map of generated files for UI display."""
@@ -1757,50 +2003,6 @@ CRITICAL INSTRUCTIONS:
             and (output_dir / "mvp_brief.md").exists()
         )
 
-    async def run_codex_codebase_turn(
-        self,
-        codebase_dir: Path,
-        prompt: str,
-        run_dir: Path,
-        label: str,
-    ) -> tuple[str, str, int]:
-        """Run one noninteractive Codex CLI turn inside the generated workspace."""
-        codex_binary = self.find_codex_binary()
-        if not codex_binary:
-            raise RuntimeError("Codex CLI not found; set CODEX_BIN")
-
-        codex_cmd = [
-            codex_binary,
-            "exec",
-            "--cd",
-            str(codebase_dir),
-            "--skip-git-repo-check",
-            "--ignore-rules",
-            "--sandbox",
-            "workspace-write",
-            "--full-auto",
-            "--model",
-            os.environ.get("CODEX_CODEBASE_MODEL", "gpt-5.4-mini"),
-            prompt,
-        ]
-        codex_proc = await asyncio.create_subprocess_exec(
-            *codex_cmd,
-            cwd=str(codebase_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        codex_timeout_s = int(os.environ.get("CODEX_CODEBASE_TIMEOUT", "900"))
-        stdout_b, stderr_b = await asyncio.wait_for(
-            codex_proc.communicate(),
-            timeout=codex_timeout_s,
-        )
-        stdout = stdout_b.decode("utf-8", errors="replace")
-        stderr = stderr_b.decode("utf-8", errors="replace")
-        safe_label = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in label).strip("_") or "codex"
-        (run_dir / f"{safe_label}_stdout.log").write_text(stdout, encoding="utf-8")
-        (run_dir / f"{safe_label}_stderr.log").write_text(stderr, encoding="utf-8")
-        return stdout, stderr, codex_proc.returncode or 0
-
     def prune_codebase_workspace(self, output_dir: Path) -> List[str]:
         """Remove known nonessential artifacts from generated MVP workspaces."""
         import shutil
@@ -1825,22 +2027,9 @@ CRITICAL INSTRUCTIONS:
             removed.append(name)
         return removed
 
-    def write_codebase_eval_summary(
-        self,
-        run_dir: Path,
-        output_dir: Path,
-        files: Dict[str, str],
-        stdout: str,
-        stderr: str,
-        returncode: int,
-        browser_eval: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Persist local, ignored evidence for the generated MVP run."""
+    def collect_codebase_checks(self, output_dir: Path) -> List[Dict[str, Any]]:
+        """Run deterministic checks against the generated flat MVP workspace."""
         import py_compile
-
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "agent_stdout.log").write_text(stdout or "", encoding="utf-8")
-        (run_dir / "agent_stderr.log").write_text(stderr or "", encoding="utf-8")
 
         checks = []
         app_path = output_dir / "app.py"
@@ -1869,6 +2058,35 @@ CRITICAL INSTRUCTIONS:
             checks.append({"name": "mvp_brief.md includes architecture", "status": "PASS"})
         else:
             checks.append({"name": "mvp_brief.md includes architecture", "status": "FAIL"})
+        return checks
+
+    def summarize_codebase_check_failures(self, checks: List[Dict[str, Any]]) -> str:
+        """Convert failed deterministic checks into a compact repair prompt note."""
+        failures = []
+        for check in checks:
+            if check.get("status") == "PASS":
+                continue
+            detail = f": {check['detail']}" if check.get("detail") else ""
+            failures.append(f"- {check.get('name', 'check')}{detail}")
+        return "\n".join(failures)
+
+    def write_codebase_eval_summary(
+        self,
+        run_dir: Path,
+        output_dir: Path,
+        files: Dict[str, str],
+        stdout: str,
+        stderr: str,
+        returncode: int,
+        browser_eval: Optional[Dict[str, Any]] = None,
+        preview: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Persist local, ignored evidence for the generated MVP run."""
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "agent_stdout.log").write_text(stdout or "", encoding="utf-8")
+        (run_dir / "agent_stderr.log").write_text(stderr or "", encoding="utf-8")
+
+        checks = self.collect_codebase_checks(output_dir)
 
         evaluation = {
             "agent_returncode": returncode,
@@ -1876,6 +2094,7 @@ CRITICAL INSTRUCTIONS:
             "files": files,
             "checks": checks,
             "browser_eval": browser_eval or {"status": "SKIP", "reason": "browser evaluation was not run"},
+            "preview": preview or {"status": "SKIP", "reason": "preview server was not started"},
             "run_dir": str(run_dir.relative_to(WORKSPACE_ROOT)),
             "note": "Screenshots and browser logs are saved in this run folder when Playwright evaluation is available.",
         }
@@ -1907,6 +2126,18 @@ CRITICAL INSTRUCTIONS:
             summary_lines.append(f"- Screenshot: `{screenshot}`")
         if evaluation["browser_eval"].get("error"):
             summary_lines.append(f"- Error: {evaluation['browser_eval']['error']}")
+        summary_lines.extend([
+            "",
+            "## Live Preview",
+            "",
+            f"- Status: `{evaluation['preview'].get('status', 'UNKNOWN')}`",
+        ])
+        if evaluation["preview"].get("preview_path"):
+            summary_lines.append(f"- Same-origin path: `{evaluation['preview']['preview_path']}`")
+        if evaluation["preview"].get("preview_url"):
+            summary_lines.append(f"- URL: `{evaluation['preview']['preview_url']}`")
+        if evaluation["preview"].get("error"):
+            summary_lines.append(f"- Error: {evaluation['preview']['error']}")
         (run_dir / "SUMMARY.md").write_text("\n".join(summary_lines).rstrip() + "\n", encoding="utf-8")
         return evaluation
 
@@ -2025,26 +2256,46 @@ const mobilePath = {json.dumps(str(mobile_path))};
   await page.setViewportSize({{ width: 390, height: 844 }});
   await page.goto(url, {{ waitUntil: 'networkidle', timeout: 15000 }});
   await page.screenshot({{ path: mobilePath, fullPage: true }});
-  const mobileMetrics = await page.evaluate(() => ({{
-    viewportWidth: window.innerWidth,
-    documentWidth: document.documentElement.scrollWidth,
-    bodyWidth: document.body ? document.body.scrollWidth : 0
-  }}));
+	  const mobileMetrics = await page.evaluate(() => ({{
+	    viewportWidth: window.innerWidth,
+	    documentWidth: document.documentElement.scrollWidth,
+	    bodyWidth: document.body ? document.body.scrollWidth : 0
+	  }}));
+	  const requiredGroups = [
+	    ['overview', ['overview', 'total tasks']],
+	    ['agent status', ['agent status', 'agent online', 'active agents']],
+	    ['commands', ['commands', 'new task', 'refresh']],
+	    ['task history', ['task history']],
+	    ['activity feed', ['activity feed']]
+	  ];
+	  const lowerBody = bodyText.toLowerCase();
+	  const missingTerms = requiredGroups
+	    .filter(([name, terms]) => !terms.some(term => lowerBody.includes(term)))
+	    .map(([name]) => name);
 
-  await browser.close();
-  const horizontalOverflow = mobileMetrics.documentWidth > mobileMetrics.viewportWidth + 4
-    || mobileMetrics.bodyWidth > mobileMetrics.viewportWidth + 4;
-  fs.writeFileSync(summaryPath, JSON.stringify({{
-    ok: !horizontalOverflow,
-    error: horizontalOverflow
-      ? `mobile horizontal overflow: viewport ${{mobileMetrics.viewportWidth}}, document ${{mobileMetrics.documentWidth}}, body ${{mobileMetrics.bodyWidth}}`
-      : '',
-    title,
-    h1,
-    interactiveCount,
-    mobileMetrics,
-    bodyTextSample: bodyText.slice(0, 1200),
-    consoleLogs,
+	  await browser.close();
+	  const horizontalOverflow = mobileMetrics.documentWidth > mobileMetrics.viewportWidth + 4;
+	  const tooFewControls = interactiveCount < 2;
+	  const consoleErrors = consoleLogs.filter(log => log.startsWith('error:') || log.startsWith('pageerror:'));
+	  fs.writeFileSync(summaryPath, JSON.stringify({{
+	    ok: !horizontalOverflow && missingTerms.length === 0 && !tooFewControls && consoleErrors.length === 0,
+	    error: horizontalOverflow
+	      ? `mobile horizontal overflow: viewport ${{mobileMetrics.viewportWidth}}, document ${{mobileMetrics.documentWidth}}, body ${{mobileMetrics.bodyWidth}}`
+	      : missingTerms.length
+	        ? `missing expected dashboard terms: ${{missingTerms.join(', ')}}`
+	        : tooFewControls
+	          ? `expected at least 2 interactive controls, found ${{interactiveCount}}`
+	          : consoleErrors.length
+	            ? `browser console/page errors: ${{consoleErrors.join(' | ')}}`
+	          : '',
+	    title,
+	    h1,
+	    interactiveCount,
+	    missingTerms,
+	    consoleErrors,
+	    mobileMetrics,
+	    bodyTextSample: bodyText.slice(0, 1200),
+	    consoleLogs,
     screenshots: [
       {json.dumps(str(desktop_path.relative_to(WORKSPACE_ROOT)))},
       {json.dumps(str(mobile_path.relative_to(WORKSPACE_ROOT)))}
@@ -2107,6 +2358,99 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 app_stdout, app_stderr = await app_proc.communicate()
             app_stdout_path.write_bytes(app_stdout or b"")
             app_stderr_path.write_bytes(app_stderr or b"")
+
+    async def start_codebase_preview_server(self, run_dir: Path, output_dir: Path) -> Dict[str, Any]:
+        """Keep a generated Qwen MVP running behind the Spark preview proxy."""
+        import sys
+
+        app_path = output_dir / "app.py"
+        if not app_path.exists():
+            return {"status": "SKIP", "reason": "workspace app.py does not exist"}
+
+        python_bin = WORKSPACE_ROOT / ".venv-gpu" / "bin" / "python"
+        if not python_bin.exists():
+            python_bin = Path(sys.executable)
+
+        slug = output_dir.name
+        await _stop_codebase_preview(slug)
+        port = self.find_free_local_port()
+        upstream_url = f"http://127.0.0.1:{port}"
+        stdout_path = run_dir / "preview_stdout.log"
+        stderr_path = run_dir / "preview_stderr.log"
+
+        with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+            proc = await asyncio.create_subprocess_exec(
+                str(python_bin),
+                "-m",
+                "uvicorn",
+                "app:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--log-level",
+                "warning",
+                cwd=str(output_dir),
+                stdout=stdout_file,
+                stderr=stderr_file,
+            )
+
+        ready = await self.wait_for_http_ready(upstream_url)
+        if not ready:
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+            return {
+                "status": "FAIL",
+                "slug": slug,
+                "upstream_url": upstream_url,
+                "error": "generated preview app did not become ready",
+                "stdout": str(stdout_path.relative_to(WORKSPACE_ROOT)),
+                "stderr": str(stderr_path.relative_to(WORKSPACE_ROOT)),
+            }
+
+        preview = {
+            "status": "PASS",
+            "slug": slug,
+            "port": port,
+            "upstream_url": upstream_url,
+            "preview_path": _codebase_preview_path(slug),
+            "preview_url": _codebase_preview_url(slug),
+            "stdout": str(stdout_path.relative_to(WORKSPACE_ROOT)),
+            "stderr": str(stderr_path.relative_to(WORKSPACE_ROOT)),
+        }
+        codebase_preview_processes[slug] = {**preview, "process": proc, "output_dir": output_dir}
+        return preview
+
+    def append_codebase_preview_note(self, output_dir: Path, preview: Dict[str, Any]) -> None:
+        """Add the live preview URL to the generated brief without asking Qwen to rerun."""
+        if preview.get("status") != "PASS":
+            return
+        brief_path = output_dir / "mvp_brief.md"
+        if not brief_path.exists():
+            return
+        text = brief_path.read_text(encoding="utf-8")
+        start = "<!-- spark-preview:start -->"
+        end = "<!-- spark-preview:end -->"
+        section = (
+            f"{start}\n"
+            "## Live Preview\n\n"
+            "- Status: running through Spark's local preview proxy.\n"
+            f"- Preview URL: {preview['preview_url']}\n"
+            f"- Same-origin path: {preview['preview_path']}\n"
+            f"{end}\n"
+        )
+        if start in text and end in text:
+            before = text.split(start, 1)[0].rstrip()
+            after = text.split(end, 1)[1].lstrip()
+            updated = f"{before}\n\n{section}\n{after}".rstrip() + "\n"
+        else:
+            updated = f"{text.rstrip()}\n\n{section}"
+        brief_path.write_text(updated, encoding="utf-8")
 
     def extract_workspace_todos(self, task: str, context: str = "", items: list = None) -> List[str]:
         """Extract Computex action items from tool arguments or debrief context."""
@@ -2336,10 +2680,15 @@ const mobilePath = {json.dumps(str(mobile_path))};
             await self.send_message("error", {"error": f"Workspace update error: {str(e)}"})
 
     async def execute_codebase_agent(self, task: str, context: str = "", output_dir: str = "agent_monitor_mvp"):
-        """Launch a constrained coding sub-agent and save local evaluation evidence."""
+        """Run the local Qwen coding sub-agent and save local evaluation evidence."""
         try:
             codebase_dir = self.resolve_workspace_codebase_dir(output_dir)
             codebase_dir.mkdir(parents=True, exist_ok=True)
+            for name in ("app.py", "task_history.json", "mvp_brief.md"):
+                path = codebase_dir / name
+                if path.exists() and path.is_file():
+                    path.unlink()
+            self.prune_codebase_workspace(codebase_dir)
             run_dir = self.resolve_mvp_run_dir()
 
             await self.send_message("agent_started", {
@@ -2348,99 +2697,100 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 "codebase_path": str(codebase_dir.relative_to(WORKSPACE_ROOT)),
             })
 
-            binary = self.find_openclaw_binary()
-            if not binary:
-                raise RuntimeError("OpenClaw binary not found; set OPENCLAW_BIN")
+            stdout_parts = []
+            stderr_parts = []
+            browser_eval: Dict[str, Any] = {"status": "SKIP", "reason": "browser evaluation was not run"}
+            previous_error = ""
+            proc_returncode = 1
+            attempts = max(1, int(os.environ.get("QWEN_CODEBASE_ATTEMPTS", "3")))
+            started_at = time.monotonic()
+            attempt_details = []
 
-            prompt = self.build_codebase_agent_prompt(task, context, codebase_dir, run_dir)
-            (run_dir / "agent_prompt.md").write_text(prompt, encoding="utf-8")
+            for attempt in range(1, attempts + 1):
+                attempt_started_at = time.monotonic()
+                print(f"[Voice Session] Launching Qwen codebase assistant attempt {attempt}/{attempts} in {codebase_dir}")
+                await self.send_message("codebase_progress", {
+                    "message": f"Generating MVP with local Qwen, attempt {attempt} of {attempts}.",
+                    "attempt": attempt,
+                    "attempts": attempts,
+                })
 
-            backend = "openclaw"
-            cmd = [
-                binary,
-                "agent",
-                "--local",
-                "--agent",
-                os.environ.get("OPENCLAW_AGENT", "main"),
-                "--message",
-                prompt,
-                "--thinking",
-                os.environ.get("OPENCLAW_CODEBASE_THINKING", "medium"),
-                "--json",
-                "--timeout",
-                os.environ.get("OPENCLAW_CODEBASE_TIMEOUT", "600"),
-            ]
-            print(f"[Voice Session] Launching codebase agent in {codebase_dir}")
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(codebase_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            timeout_s = int(os.environ.get("OPENCLAW_CODEBASE_TIMEOUT", "600")) + 20
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-            stdout = stdout_b.decode("utf-8", errors="replace")
-            stderr = stderr_b.decode("utf-8", errors="replace")
-
-            openclaw_failed = (
-                "Cannot convert undefined or null to object" in stderr
-                or (proc.returncode not in (0, None) and not stdout.strip())
-            )
-            files = self.summarize_codebase_files(codebase_dir)
-            if openclaw_failed or not self.codebase_has_required_files(codebase_dir):
-                if self.find_codex_binary():
-                    backend = "codex"
-                    codex_prompt = "\n".join([
-                        prompt,
-                        "",
-                        "OpenClaw did not complete the MVP build, so you are the fallback coding agent.",
-                        "Create the MVP files directly now. Keep the output flat and confined to the current directory.",
-                        "Do not create AGENTS.md, task_plan.md, findings.md, progress.md, README.md, or .codex.",
-                    ])
-                    print(f"[Voice Session] OpenClaw produced no MVP files; launching Codex fallback in {codebase_dir}")
-                    codex_stdout, codex_stderr, proc_returncode = await self.run_codex_codebase_turn(
+                try:
+                    response = await self.run_qwen_codebase_turn(
+                        task,
+                        context,
                         codebase_dir,
-                        codex_prompt,
                         run_dir,
-                        "codex",
+                        attempt,
+                        previous_error=previous_error,
                     )
-                    stdout = "\n\n=== OpenClaw stdout ===\n" + stdout + "\n\n=== Codex stdout ===\n" + codex_stdout
-                    stderr = "\n\n=== OpenClaw stderr ===\n" + stderr + "\n\n=== Codex stderr ===\n" + codex_stderr
-                    self.prune_codebase_workspace(codebase_dir)
-                    files = self.summarize_codebase_files(codebase_dir)
-                else:
-                    proc_returncode = proc.returncode or 0
-            else:
-                proc_returncode = proc.returncode or 0
+                except Exception as exc:
+                    previous_error = f"Qwen generation attempt {attempt} failed: {exc}"
+                    stderr_parts.append(previous_error)
+                    attempt_details.append({
+                        "attempt": attempt,
+                        "duration_seconds": round(time.monotonic() - attempt_started_at, 1),
+                        "status": "ERROR",
+                        "error": str(exc),
+                    })
+                    continue
 
-            self.prune_codebase_workspace(codebase_dir)
-            files = self.summarize_codebase_files(codebase_dir)
-            browser_eval = await self.run_codebase_browser_eval(run_dir, codebase_dir)
-            if browser_eval.get("status") == "FAIL" and self.find_codex_binary():
-                backend = f"{backend}+repair"
-                repair_prompt = "\n".join([
-                    "The generated MVP failed browser evaluation.",
-                    f"Error: {browser_eval.get('error', 'unknown error')}",
-                    "",
-                    "Repair the generated app in the current directory.",
-                    "Keep only app.py, task_history.json, and mvp_brief.md unless one extra flat file is strictly necessary.",
-                    "Do not create AGENTS.md, task_plan.md, findings.md, progress.md, README.md, .codex, or nested directories.",
-                    "Make sure `python -m uvicorn app:app` can import and serve the app.",
-                    "If FastAPI route annotations cause response-model errors, remove optional Request annotations or set response_model=None.",
-                    "Update mvp_brief.md with the repair and validation notes.",
-                ])
-                print(f"[Voice Session] Browser evaluation failed; launching Codex repair in {codebase_dir}")
-                repair_stdout, repair_stderr, proc_returncode = await self.run_codex_codebase_turn(
-                    codebase_dir,
-                    repair_prompt,
-                    run_dir,
-                    "codex_repair",
-                )
-                stdout += "\n\n=== Codex repair stdout ===\n" + repair_stdout
-                stderr += "\n\n=== Codex repair stderr ===\n" + repair_stderr
+                stdout_parts.append(f"=== Qwen attempt {attempt} response ===\n{response}")
+                files, parse_errors = self.write_qwen_codebase_files(codebase_dir, response)
                 self.prune_codebase_workspace(codebase_dir)
                 files = self.summarize_codebase_files(codebase_dir)
+                checks = self.collect_codebase_checks(codebase_dir)
+                check_failures = self.summarize_codebase_check_failures(checks)
+
+                if parse_errors:
+                    stderr_parts.append(f"=== Qwen attempt {attempt} parse notes ===\n" + "\n".join(parse_errors))
+                if parse_errors or not self.codebase_has_required_files(codebase_dir):
+                    previous_error = "\n".join(parse_errors) or "Missing one or more required files."
+                    attempt_details.append({
+                        "attempt": attempt,
+                        "duration_seconds": round(time.monotonic() - attempt_started_at, 1),
+                        "status": "PARSE_FAIL",
+                        "error": previous_error,
+                    })
+                    continue
+                if check_failures:
+                    previous_error = "Deterministic validation failed:\n" + check_failures
+                    stderr_parts.append(f"=== Qwen attempt {attempt} validation failures ===\n{check_failures}")
+                    attempt_details.append({
+                        "attempt": attempt,
+                        "duration_seconds": round(time.monotonic() - attempt_started_at, 1),
+                        "status": "VALIDATION_FAIL",
+                        "error": check_failures,
+                    })
+                    continue
+
                 browser_eval = await self.run_codebase_browser_eval(run_dir, codebase_dir)
+                if browser_eval.get("status") in {"PASS", "SKIP"}:
+                    proc_returncode = 0
+                    attempt_details.append({
+                        "attempt": attempt,
+                        "duration_seconds": round(time.monotonic() - attempt_started_at, 1),
+                        "status": browser_eval.get("status"),
+                    })
+                    break
+
+                previous_error = "Browser evaluation failed: " + browser_eval.get("error", "unknown browser error")
+                stderr_parts.append(f"=== Qwen attempt {attempt} browser failure ===\n{previous_error}")
+                attempt_details.append({
+                    "attempt": attempt,
+                    "duration_seconds": round(time.monotonic() - attempt_started_at, 1),
+                    "status": "BROWSER_FAIL",
+                    "error": browser_eval.get("error", "unknown browser error"),
+                })
+
+            stdout = "\n\n".join(stdout_parts)
+            stderr = "\n\n".join(stderr_parts)
+            files = self.summarize_codebase_files(codebase_dir)
+            preview_info: Dict[str, Any] = {"status": "SKIP", "reason": "MVP generation did not pass validation"}
+            if proc_returncode == 0 and files:
+                preview_info = await self.start_codebase_preview_server(run_dir, codebase_dir)
+                self.append_codebase_preview_note(codebase_dir, preview_info)
+                files = self.summarize_codebase_files(codebase_dir)
             evaluation = self.write_codebase_eval_summary(
                 run_dir,
                 codebase_dir,
@@ -2449,22 +2799,28 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 stderr,
                 proc_returncode,
                 browser_eval,
+                preview_info,
             )
-            evaluation["backend"] = backend
+            evaluation["backend"] = "qwen"
+            evaluation["duration_seconds"] = round(time.monotonic() - started_at, 1)
+            evaluation["attempts"] = attempt_details
             (run_dir / "evaluation.json").write_text(json.dumps(evaluation, indent=2) + "\n", encoding="utf-8")
 
-            if proc_returncode == 0 and files:
-                summary = "Done. I built the local MVP codebase and saved evaluation notes."
+            if proc_returncode == 0 and files and preview_info.get("status") == "PASS":
+                summary = "Done. Local Qwen built the MVP codebase, started the live preview, and saved screenshots."
+            elif proc_returncode == 0 and files:
+                summary = "Done. Local Qwen built the MVP codebase and saved evaluation notes."
             elif files:
-                summary = "I generated partial MVP files and saved the agent/evaluation logs for review."
+                summary = "Local Qwen generated partial MVP files and saved the agent/evaluation logs for review."
             else:
-                summary = "The coding agent did not produce MVP files; I saved the failure logs for review."
+                summary = "Local Qwen did not produce MVP files; I saved the failure logs for review."
 
             self.conversation_history.append({
                 "role": "assistant",
                 "content": (
                     f"{summary} Codebase: {evaluation['codebase_path']}. "
                     f"Evidence: {evaluation['run_dir']}."
+                    + (f" Preview: {preview_info['preview_url']}." if preview_info.get("preview_url") else "")
                 )
             })
             self.publish_handoff_state()
@@ -2474,6 +2830,9 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 "files": files,
                 "evaluation": evaluation,
                 "run_dir": evaluation["run_dir"],
+                "preview": preview_info,
+                "preview_path": preview_info.get("preview_path", ""),
+                "preview_url": preview_info.get("preview_url", ""),
             })
             await self.stream_tts(summary)
         except asyncio.TimeoutError:

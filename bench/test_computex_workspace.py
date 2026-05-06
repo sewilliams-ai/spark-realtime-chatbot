@@ -52,16 +52,47 @@ def main() -> int:
             codebase_dir,
             run_dir,
         )
+        assert "Qwen3.6" in prompt
         assert "Work only inside this directory" in prompt
         assert "Do not edit the Spark realtime chatbot repo" in prompt
-        assert "app.py, task_history.json, mvp_brief.md" in prompt
+        assert "Output exactly these files: app.py, task_history.json, mvp_brief.md" in prompt
+        assert "<<<FILE: app.py>>>" in prompt
         assert "Do not create AGENTS.md" in prompt
         assert "Do not create frontend/, backend/, database/" in prompt
+        assert not hasattr(session, "run_codex_codebase_turn")
+        assert server._codebase_preview_path("agent_monitor_mvp") == "/generated/agent_monitor_mvp/"
+        rewritten = server._rewrite_codebase_preview_content(
+            b'<script>fetch("/api/tasks"); fetch(`/api/status`)</script>',
+            "text/html; charset=utf-8",
+            "agent_monitor_mvp",
+        ).decode("utf-8")
+        assert '"/generated/agent_monitor_mvp/api/tasks' in rewritten
+        assert "`/generated/agent_monitor_mvp/api/status" in rewritten
+
+        blocks = """<<<FILE: app.py>>>
+from fastapi import FastAPI
+app = FastAPI()
+<<<END FILE>>>
+<<<FILE: task_history.json>>>
+[]
+<<<END FILE>>>
+<<<FILE: mvp_brief.md>>>
+# MVP Brief
+
+## Architecture
+
+FastAPI plus JSON.
+<<<END FILE>>>
+<<<FILE: README.md>>>
+ignored
+<<<END FILE>>>
+"""
 
         codebase_dir.mkdir(parents=True)
-        (codebase_dir / "app.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
-        (codebase_dir / "task_history.json").write_text("[]\n", encoding="utf-8")
-        (codebase_dir / "mvp_brief.md").write_text("# MVP Brief\n\n## Architecture\n\nFastAPI plus JSON.\n", encoding="utf-8")
+        generated_files, parse_errors = session.write_qwen_codebase_files(codebase_dir, blocks)
+        assert generated_files["app"] == "workspace/agent_monitor_mvp/app.py"
+        assert any("README.md" in error for error in parse_errors), parse_errors
+        assert not (codebase_dir / "README.md").exists()
         (codebase_dir / "task_plan.md").write_text("extra\n", encoding="utf-8")
         (codebase_dir / "AGENTS.md").write_text("extra\n", encoding="utf-8")
         removed = session.prune_codebase_workspace(codebase_dir)
@@ -78,8 +109,10 @@ def main() -> int:
             "",
             0,
             {"status": "SKIP", "reason": "unit test"},
+            {"status": "PASS", "preview_path": "/generated/agent_monitor_mvp/"},
         )
         assert evaluation["codebase_path"] == "workspace/agent_monitor_mvp"
+        assert evaluation["preview"]["status"] == "PASS"
         assert evaluation["run_dir"].startswith("test_assets/mvp-generation-runs/")
         assert all(check["status"] == "PASS" for check in evaluation["checks"]), evaluation
         assert (run_dir / "SUMMARY.md").exists()
