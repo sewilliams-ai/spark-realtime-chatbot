@@ -46,3 +46,18 @@ for the fashion beat, exact Redis/pub-sub judgment, handwritten todo list, and
 React/FastAPI/MySQL project-dashboard acknowledgment. Tests run:
 `.venv-gpu/bin/python -m py_compile prompts.py`, prompt-loader smoke assertions,
 and `git diff --check`; all passed.
+
+## Session 2026-05-06 - Phase 3 tool and server routing
+
+Exposed the existing HTML assistant executor through `tools.py` so the UI
+checkbox has a matching schema and sentinel path. Updated `server.py` to treat
+`html_assistant` as a UI agent in the text loop and to route explicit prototype
+requests into the existing HTML executor. Replaced the old Beat 4 handwritten
+todo/umbrella routing with Computex executive-update routing that writes
+`workspace/team_update.md`, `workspace/executive_brief.md`, and
+`workspace/personal_todos.md`, including the high mountain oolong tea gift
+memory. Removed old deterministic fallback items and old React/FastAPI/MySQL
+acknowledgments from active server/tool paths. Tests run:
+`.venv-gpu/bin/python -m py_compile server.py tools.py`, tool sentinel smoke,
+Computex workspace routing smoke, stale-string `rg`, and `git diff --check`;
+all passed.

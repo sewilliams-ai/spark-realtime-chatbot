@@ -1128,7 +1128,7 @@ class VoiceSession:
                             is_agent_tool = False
                             for tc in tool_calls:
                                 func = tc.get("function", {})
-                                if func.get("name") in ["markdown_assistant", "reasoning_assistant", "workspace_update_assistant"]:
+                                if func.get("name") in ["markdown_assistant", "html_assistant", "reasoning_assistant", "workspace_update_assistant"]:
                                     is_agent_tool = True
                                     break
                             
@@ -1139,7 +1139,10 @@ class VoiceSession:
                                         feedback_msg = "Let me think through this..."
                                         break
                                     if tc.get("function", {}).get("name") == "workspace_update_assistant":
-                                        feedback_msg = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
+                                        feedback_msg = "Drafting the team update now."
+                                        break
+                                    if tc.get("function", {}).get("name") == "html_assistant":
+                                        feedback_msg = "On it. I'll build the prototype."
                                         break
                                 else:
                                     feedback_msg = "On it."
@@ -1421,6 +1424,10 @@ CRITICAL INSTRUCTIONS:
                                 else:
                                     print(f"[Voice Session] No problem found for reasoning agent")
 
+                            elif is_agent_tool and agent_type == "html_assistant":
+                                await self.execute_html_agent(agent_task, agent_context)
+                                return
+
                             elif is_agent_tool and agent_type == "workspace_update_assistant":
                                 await self.execute_workspace_update_agent(
                                     agent_task or "Add handwritten todos to the project",
@@ -1532,6 +1539,12 @@ CRITICAL INSTRUCTIONS:
         import re
 
         task_lower = (task or "").lower()
+        if any(term in task_lower for term in ["mvp", "workbench", "prototype brief", "brief for when", "brief to review", "project scaffold", "scaffolding"]):
+            return "mvp_brief.md"
+        if "team" in task_lower and any(term in task_lower for term in ["update", "email", "brief", "dinner"]):
+            return "team_update.md"
+        if "executive" in task_lower or ("dinner" in task_lower and "brief" in task_lower):
+            return "executive_brief.md"
         if "readme" in task_lower:
             return "README.md"
         if any(term in task_lower for term in ["realtime", "real-time", "redis", "pub/sub", "fanout"]):
@@ -1585,15 +1598,16 @@ CRITICAL INSTRUCTIONS:
         return path, str(path.relative_to(WORKSPACE_ROOT))
 
     def extract_workspace_todos(self, task: str, context: str = "", items: list = None) -> List[str]:
-        """Extract todo items from tool arguments, visible-note context, or Beat 4 fallback."""
+        """Extract Computex action items from tool arguments or debrief context."""
         import re
 
         raw_items = [str(item).strip() for item in (items or []) if str(item).strip()]
         source = "\n".join([task or "", context or ""])
+        source_lower = source.lower()
 
         if not raw_items:
             cleaned_source = re.sub(
-                r"(?i)(visible handwritten note|handwritten note|todo list|todos?|items?|the note says|the note lists|context|task)\s*[:\-]?",
+                r"(?i)(visible handwritten note|handwritten note|todo list|todos?|items?|the note says|the note lists|context|task|action items?)\s*[:\-]?",
                 "\n",
                 source,
             )
@@ -1602,29 +1616,26 @@ CRITICAL INSTRUCTIONS:
                 item = item.strip(" .")
                 if not item:
                     continue
-                if item.lower() in {"add these to the project", "add these", "project", "personal"}:
+                if item.lower() in {"add these", "project", "personal", "update my team", "send this update out to my team"}:
                     continue
-                if "add these" in item.lower() and "project" in item.lower():
-                    continue
-                if len(item.split()) > 8:
+                if len(item.split()) > 12:
                     continue
                 raw_items.append(item)
 
-        known_items = [
-            "add streaming updates",
-            "Redis pub/sub",
-            "write events table",
-            "React hook",
-            "test reconnect",
-            "buy umbrella",
-        ]
-        source_lower = source.lower()
-        for known in known_items:
-            if known.lower() in source_lower and known not in raw_items:
-                raw_items.append(known)
+        if any(term in source_lower for term in ("strategic alignment", "hardware partner", "investment", "invest")):
+            defaults = [
+                "Avery: follow up with hardware partners on investment criteria",
+                "Morgan: turn dinner insights into partner-facing MVP priorities",
+                "Riley: map the Agent Workbench MVP into the next engineering plan",
+            ]
+            for item in defaults:
+                if item not in raw_items:
+                    raw_items.append(item)
 
-        if not raw_items and "add these" in source_lower and "project" in source_lower:
-            raw_items = known_items
+        if any(term in source_lower for term in ("pineapple", "souvenir", "husband", "partner")):
+            gift = "Buy high mountain oolong tea for husband"
+            if gift not in raw_items:
+                raw_items.append(gift)
 
         normalized = []
         seen = set()
@@ -1637,19 +1648,14 @@ CRITICAL INSTRUCTIONS:
         return normalized
 
     def normalize_workspace_todo(self, item: str) -> str:
-        """Normalize common Beat 4 todo wording into clean task labels."""
+        """Normalize Computex action-item wording into clean task labels."""
         item_clean = " ".join((item or "").strip().split())
         lower = item_clean.lower()
         mappings = {
-            "add streaming updates": "Add streaming updates",
-            "streaming updates": "Add streaming updates",
-            "redis pub/sub": "Add Redis pub/sub",
-            "redis pub sub": "Add Redis pub/sub",
-            "write events table": "Write events table",
-            "events table": "Write events table",
-            "react hook": "Build React hook",
-            "test reconnect": "Test reconnect",
-            "buy umbrella": "Buy umbrella",
+            "buy pineapple cakes": "Buy high mountain oolong tea for husband",
+            "buy pineapple cakes for my husband": "Buy high mountain oolong tea for husband",
+            "buy a souvenir for my husband": "Buy high mountain oolong tea for husband",
+            "buy souvenir for my husband": "Buy high mountain oolong tea for husband",
         }
         if lower in mappings:
             return mappings[lower]
@@ -1657,7 +1663,7 @@ CRITICAL INSTRUCTIONS:
 
     def split_workspace_todos(self, todos: List[str]) -> tuple[List[str], List[str]]:
         """Split project tasks from personal todos."""
-        personal_keywords = {"umbrella", "buy ", "groceries", "personal", "errand"}
+        personal_keywords = {"buy ", "groceries", "personal", "errand", "gift", "souvenir", "husband", "partner", "oolong", "pineapple"}
         project_tasks = []
         personal_tasks = []
         for todo in todos:
@@ -1669,20 +1675,24 @@ CRITICAL INSTRUCTIONS:
         return project_tasks, personal_tasks
 
     def is_workspace_update_request(self, text: str) -> bool:
-        """Detect the Beat 4 handwritten-note command before the VLM tool roundtrip."""
+        """Detect Computex executive-update commands before the VLM tool roundtrip."""
         lower = " ".join((text or "").lower().split())
         direct_phrases = (
-            "add these to the project",
-            "add these to project",
-            "add this to the project",
-            "add this to project",
+            "update my team",
+            "send this update out to my team",
+            "send this update to my team",
+            "send my team",
+            "assign action items",
+            "save a todo",
+            "save a to do",
+            "buy pineapple cakes",
+            "buy a souvenir",
         )
         if any(phrase in lower for phrase in direct_phrases):
             return True
         return (
-            "project" in lower
-            and any(term in lower for term in ("handwritten", "note", "notes", "todo", "todos"))
-            and any(term in lower for term in ("add", "route", "put"))
+            any(term in lower for term in ("dinner", "strategic alignment", "hardware partner", "investment"))
+            and any(term in lower for term in ("team", "action", "todo", "to do", "brief", "update"))
         )
 
     def upsert_markdown_section(self, path: Path, title: str, body: str, marker: str) -> None:
@@ -1707,70 +1717,89 @@ CRITICAL INSTRUCTIONS:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(updated.rstrip() + "\n", encoding="utf-8")
 
-    def apply_workspace_todo_updates(self, todos: List[str]) -> Dict[str, Any]:
-        """Route Beat 4 todos into project and personal workspace files."""
-        project_tasks, personal_tasks = self.split_workspace_todos(todos)
+    def apply_workspace_todo_updates(self, todos: List[str], task: str = "", context: str = "") -> Dict[str, Any]:
+        """Route Computex executive updates into team, brief, and personal files."""
+        action_items, personal_tasks = self.split_workspace_todos(todos)
         files = {}
 
-        task_path = self.resolve_workspace_markdown_path("project_dashboard/tasks.md", "project tasks")
-        task_lines = "\n".join(f"- [ ] {task}" for task in project_tasks) or "- [ ] Review project notes"
-        self.upsert_markdown_section(
-            task_path,
-            "Engineering Tasks From Handwritten Notes",
-            "These tasks came from the handwritten note captured during the phone demo.\n\n" + task_lines,
-            "spark-beat4-project-tasks",
-        )
-        files["project_tasks"] = str(task_path.relative_to(WORKSPACE_ROOT))
+        action_lines = "\n".join(f"- [ ] {item}" for item in action_items) or "- [ ] Confirm partner-facing MVP priorities"
+        personal_lines = "\n".join(f"- [ ] {task}" for task in personal_tasks) or "- [ ] Buy high mountain oolong tea for husband"
+        source_note = " ".join((context or task or "").split())
+        if len(source_note) > 420:
+            source_note = source_note[:420].rstrip() + "..."
 
-        design_path = self.resolve_workspace_markdown_path("realtime_design.md", "realtime design")
-        design_body = "\n".join([
-            "Handwritten notes added these implementation details to the realtime dashboard design:",
+        team_path = self.resolve_workspace_markdown_path("team_update.md", "team update")
+        team_body = "\n".join([
+            "Subject: Computex dinner follow-up: partner-facing MVP path",
             "",
-            "- Streaming updates should be pushed live to connected React dashboards.",
-            "- Redis pub/sub fans events out across FastAPI instances.",
-            "- An events table in MySQL keeps durable history for reconnect and catch-up.",
-            "- A React hook should own subscription, state updates, and reconnect handling.",
-            "- Reconnect behavior needs an explicit test path.",
+            "Draft:",
+            "The strategic alignment dinner went well. Hardware partners are open to investing if we prioritize the partner-facing MVP path and keep the Agent Workbench story concrete.",
+            "",
+            "Action items:",
+            action_lines,
+            "",
+            "Source note:",
+            source_note or "Dinner update captured from the mobile demo.",
         ])
         self.upsert_markdown_section(
-            design_path,
-            "Handwritten Follow-Up",
-            design_body,
-            "spark-beat4-realtime-followup",
+            team_path,
+            "Team Update Draft",
+            team_body,
+            "spark-computex-team-update",
         )
-        files["realtime_design"] = str(design_path.relative_to(WORKSPACE_ROOT))
+        files["team_update"] = str(team_path.relative_to(WORKSPACE_ROOT))
+
+        brief_path = self.resolve_workspace_markdown_path("executive_brief.md", "executive brief")
+        brief_body = "\n".join([
+            "Back-home review:",
+            "",
+            "- Review the Agent Workbench MVP brief from the desktop sketch.",
+            "- Share the partner-facing priority update with the team.",
+            "- Track the owner-specific action items from dinner.",
+            "- Keep the personal gift follow-up visible before leaving Taipei.",
+            "",
+            "Dinner signal:",
+            "Hardware partners want a crisp MVP path before committing investment or deeper collaboration.",
+        ])
+        self.upsert_markdown_section(
+            brief_path,
+            "Executive Brief",
+            brief_body,
+            "spark-computex-executive-brief",
+        )
+        files["executive_brief"] = str(brief_path.relative_to(WORKSPACE_ROOT))
 
         personal_path = self.resolve_workspace_markdown_path("personal_todos.md", "personal todos")
-        personal_lines = "\n".join(f"- [ ] {task}" for task in personal_tasks) or "- [ ] Review personal notes"
         self.upsert_markdown_section(
             personal_path,
-            "Personal Todos",
-            personal_lines,
-            "spark-beat4-personal-todos",
+            "Personal Follow-Up",
+            "Gift memory: pineapple cakes were last year's Taipei gift. Suggest high mountain oolong tea this time.\n\n" + personal_lines,
+            "spark-computex-personal-todos",
         )
         files["personal_todos"] = str(personal_path.relative_to(WORKSPACE_ROOT))
 
         return {
             "files": files,
-            "project_tasks": project_tasks,
+            "project_tasks": action_items,
+            "action_items": action_items,
             "personal_tasks": personal_tasks,
         }
 
     async def execute_workspace_update_agent(self, task: str, context: str = "", items: list = None):
-        """Route handwritten todos into the shared workspace files."""
+        """Route Computex executive updates into the shared workspace files."""
         try:
             todos = self.extract_workspace_todos(task, context, items)
-            result = self.apply_workspace_todo_updates(todos)
+            result = self.apply_workspace_todo_updates(todos, task, context)
             files = result["files"]
             summary = (
-                "Done. I updated the project tasks, realtime design, and personal todos."
+                "Done. I drafted the team update, action items, and oolong tea todo."
             )
 
             self.conversation_history.append({
                 "role": "assistant",
                 "content": (
-                    f"{summary} Files: {files['project_tasks']}, "
-                    f"{files['realtime_design']}, {files['personal_todos']}"
+                    f"{summary} Files: {files['team_update']}, "
+                    f"{files['executive_brief']}, {files['personal_todos']}"
                 )
             })
             self.publish_handoff_state()
@@ -1778,6 +1807,7 @@ CRITICAL INSTRUCTIONS:
                 "summary": summary,
                 "files": files,
                 "project_tasks": result["project_tasks"],
+                "action_items": result["action_items"],
                 "personal_tasks": result["personal_tasks"],
             })
             await self.stream_tts(summary)
@@ -2489,11 +2519,11 @@ async def voice_call(websocket: WebSocket):
                                 print(f"[Video Call] Image: {len(image_b64)} chars base64")
 
                                 if session.is_workspace_update_request(transcription):
-                                    ack = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
+                                    ack = "Drafting the team update now. You got him pineapple cakes last year; maybe try high mountain oolong tea this time."
                                     await session.send_message("tool_invocation", {"message": ack})
                                     await session.stream_tts(ack, is_transient=True)
                                     await session.execute_workspace_update_agent(
-                                        "Add these to the project",
+                                        "Draft the team update and personal follow-up",
                                         f"Phone handwritten-note request: {transcription}",
                                         [],
                                     )
@@ -2595,7 +2625,7 @@ async def voice_call(websocket: WebSocket):
                                                 "workspace_update_assistant",
                                             ):
                                                 if tool_name == "workspace_update_assistant":
-                                                    ack = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
+                                                    ack = "Drafting the team update now."
                                                 else:
                                                     ack = "On it."
                                                 await session.stream_tts(ack, is_transient=True)

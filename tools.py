@@ -319,13 +319,13 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "markdown_assistant",
-            "description": "A markdown documentation assistant that writes README files, design docs, guides, and other markdown documents into the shared workspace/ scratch folder. Use this when the user asks to convert a diagram, whiteboard, notes, or design into markdown.",
+            "description": "A markdown documentation assistant that writes README files, MVP briefs, design docs, guides, and other markdown documents into the shared workspace/ scratch folder. Use this when the user asks to convert a diagram, whiteboard, notes, or design into markdown.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "The documentation task description, e.g. 'Write a README for my project' or 'Create API documentation for the user service'"
+                        "description": "The documentation task description, e.g. 'Write an MVP brief from this sketch' or 'Create API documentation for the user service'"
                     },
                     "context": {
                         "type": "string",
@@ -333,7 +333,7 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
                     },
                     "output_path": {
                         "type": "string",
-                        "description": "Optional relative markdown path inside workspace/. Use 'README.md' for a project README and 'realtime_design.md' for a realtime architecture sketch."
+                        "description": "Optional relative markdown path inside workspace/. Use 'mvp_brief.md' for the Computex Agent Workbench brief or 'README.md' for a project README."
                     }
                 },
                 "required": ["task"]
@@ -341,26 +341,48 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
         }
     },
 
-    "workspace_update_assistant": {
+    "html_assistant": {
         "type": "function",
         "function": {
-            "name": "workspace_update_assistant",
-            "description": "Updates multiple files in the shared workspace/ scratch folder from handwritten notes or todos. Use this when the user says to add notes, todos, or action items to the project, especially when some items belong in project_dashboard/tasks.md, realtime_design.md, and personal_todos.md. Do not use markdown_assistant for multi-file todo routing.",
+            "name": "html_assistant",
+            "description": "An HTML prototype assistant that creates a self-contained browser mockup from a sketch, dashboard description, or UI request. Use only when the user explicitly asks to build a webpage, HTML prototype, UI mockup, or visual MVP.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "The workspace update request, e.g. 'Add these handwritten todos to the project'"
+                        "description": "The prototype task, e.g. 'Build a single-page Agent Workbench dashboard prototype'"
                     },
                     "context": {
                         "type": "string",
-                        "description": "Visible handwritten notes or extracted todo items, plus any relevant project context"
+                        "description": "Visible sketch details or product requirements to include in the HTML prototype"
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+
+    "workspace_update_assistant": {
+        "type": "function",
+        "function": {
+            "name": "workspace_update_assistant",
+            "description": "Updates multiple files in the shared workspace/ scratch folder from executive updates, dinner debriefs, action items, and personal todos. Use this for Computex team updates and souvenir follow-ups. Do not use markdown_assistant for multi-file update routing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The workspace update request, e.g. 'Draft the team update and assign action items from dinner'"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Dinner debrief, team-update details, or visible notes plus any relevant project context"
                     },
                     "items": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional extracted todo items from the visible note"
+                        "description": "Optional extracted action items or personal todos"
                     }
                 },
                 "required": ["task"],
@@ -1036,7 +1058,7 @@ _INLINE_DISPATCH = {
 
 def is_agent_tool(tool_name: str) -> bool:
     """UI-dispatched agent tools return a sentinel payload; loop should not re-prompt."""
-    return tool_name in ("markdown_assistant", "reasoning_assistant", "workspace_update_assistant")
+    return tool_name in ("markdown_assistant", "html_assistant", "reasoning_assistant", "workspace_update_assistant")
 
 
 async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -1058,6 +1080,13 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             "context": context,
             "output_path": output_path,
             "status": "initiated"
+        })
+    if tool_name == "html_assistant":
+        return json.dumps({
+            "agent_type": "html_assistant",
+            "task": arguments.get("task", ""),
+            "context": arguments.get("context", ""),
+            "status": "initiated",
         })
     if tool_name == "reasoning_assistant":
         return json.dumps({
