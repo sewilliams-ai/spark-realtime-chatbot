@@ -196,19 +196,25 @@ def test_private_menu_variants(url, model):
     variants = [
         (
             "Visible Chinese menu translations: braised beef, steamed vegetables, fried rice, "
-            "beef noodle soup, and milk tea. Hey Claw, what should I order?"
+            "beef noodle soup, and milk tea. Hey Claw, what should I order?",
+            ["steamed", "vegetables"],
+            ["beef", "fried", "rice", "noodle", "milk tea"],
         ),
         (
             "I'm at dinner in Taipei. The visible menu has steamed fish, braised vegetables, "
             "fried chicken cutlet, salty beef noodles, and sweet milk tea. Based on what you "
-            "remember, pick something for me."
+            "remember, pick something for me.",
+            ["steamed", "fish", "braised", "vegetables"],
+            ["fried", "cutlet", "noodle", "milk tea"],
         ),
         (
             "Menu in frame: steamed greens, rice, braised tofu, fried pork chop, and milk tea. "
-            "What is the smart order tonight?"
+            "What is the smart order tonight?",
+            ["steamed", "greens", "braised", "tofu"],
+            ["fried", "pork chop", "milk tea"],
         ),
     ]
-    for idx, prompt in enumerate(variants, 1):
+    for idx, (prompt, preferred_terms, contrast_terms) in enumerate(variants, 1):
         message, elapsed = ask(url, model, [
             {"role": "system", "content": VIDEO_CALL_PROMPT},
             {"role": "user", "content": prompt},
@@ -216,8 +222,8 @@ def test_private_menu_variants(url, model):
         reply = text(message)
         lower = reply.lower()
         require(not message.get("tool_calls"), f"unexpected tool call: {message}")
-        require(contains_any(lower, ["steamed", "braised", "greens", "vegetables", "tofu", "fish"]), reply)
-        require(contains_any(lower, ["fried", "noodle", "milk tea", "cutlet", "pork chop"]), reply)
+        require(contains_any(lower, preferred_terms), reply)
+        require(contains_any(lower, contrast_terms), reply)
         require(contains_any(lower, ["lighter", "salty", "fried", "heavy", "sweet"]), reply)
         check_no_private_health_leak(reply)
         print(f"Beat 2 private menu variant {idx}: PASS :: {reply} ({elapsed:.0f}ms)")
