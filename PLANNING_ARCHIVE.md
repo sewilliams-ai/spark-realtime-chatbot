@@ -2,6 +2,62 @@
 
 This file indexes archived planning efforts only.
 
+## Bidirectional Conversation Handoff
+
+### Status
+
+Complete.
+
+### Summary
+
+Ported the useful main-branch handoff mechanics into `claw` as a lean,
+process-local, bidirectional conversation-transfer layer. The final UX shows a
+`Continue Call` option in the Start New Chat modal only when another active
+device owns a live call, preserves completed conversation context across
+phone/laptop transfers, shows an inline bring-back action on the displaced
+device, and recovers video input after empty-ASR and WebSocket timing edge
+cases found during live testing.
+
+### Archived Files
+
+- `.planning/archive/2026-05-06-bidirectional-conversation-handoff/task_plan.md`
+- `.planning/archive/2026-05-06-bidirectional-conversation-handoff/findings.md`
+- `.planning/archive/2026-05-06-bidirectional-conversation-handoff/progress.md`
+
+### Planning Notes
+
+- The initial plan intentionally avoided a new `handoff.py`; the final
+  implementation kept handoff helpers in `server.py` because the feature is
+  tightly coupled to `VoiceSession`, live WebSockets, and active call state.
+- The UX plan changed after live review: the offer belongs in the Start New
+  Chat modal on the second device, not only after camera/mic setup.
+- Duplicate prompts were removed by treating the modal/bring-back button as
+  the confirmation and auto-resuming the matching WebSocket offer.
+- The displaced-device prompt moved from a fixed bottom banner to an inline
+  conversation panel.
+- Live testing found a video-call bug where empty ASR could leave VAD paused;
+  `resumeVideoCallListening()` now clears the processing state and restarts
+  listening. The same recovery path handles resumed WebSocket timing races.
+
+### Implementation Commits
+
+- `d581518 [feat] add bidirectional conversation handoff`
+- `8ef7bf4 [feat] surface pre-call handoff option`
+- `2fead25 [fix] skip duplicate handoff confirmation`
+- `6b213c4 [fix] skip duplicate bring-back confirmation`
+- `2c47fa5 [fix] render transfer back prompt inline`
+- `0abbd15 [fix] resume video input after empty asr`
+- `731f029 [fix] recover video input on websocket race`
+
+### Test Status
+
+- `.venv-gpu/bin/python bench/test_handoff.py`: **PASS**.
+- `.venv-gpu/bin/python -m py_compile server.py bench/test_handoff.py`: **PASS**.
+- `node --check static/js/app.js`: **PASS**.
+- `.venv-gpu/bin/python bench/test_demo_prompts.py`: **PASS**.
+- `git diff --check`: **PASS**.
+- Live HTTPS/WSS desktop -> mobile -> desktop smoke: **PASS**.
+
 ## WHOOP Integration
 
 ### Status

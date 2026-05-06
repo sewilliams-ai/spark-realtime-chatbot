@@ -10,21 +10,37 @@
 
 ### Summary
 
-Added process-local, context-preserving handoff for active voice/video conversations. A second device now receives an in-call offer only when another active device owns the same `conversation_id`; accepting hydrates completed conversation context, selected voice, system prompt, and enabled tools, then transfers ownership. The displaced device shows a bring-back action so the same conversation can move phone -> laptop or laptop -> phone repeatedly.
+Added process-local, context-preserving handoff for active voice/video conversations. When a second device opens the Start New Chat modal during an active call, it can choose `Continue Call`; accepting hydrates completed conversation context, selected voice, system prompt, enabled tools, and call mode, then transfers ownership. The displaced device shows an inline bring-back action so the same conversation can move phone -> laptop or laptop -> phone repeatedly.
 
 ### Implementation
 
 - `server.py` keeps sanitized in-memory handoff state keyed by `conversation_id`, with active-owner tracking, TTL pruning, pending-handoff guards, and generic transfer control.
-- `static/js/app.js` assigns browser-local conversation ids, sends `device`, `chat_id`, and `conversation_id` on `/ws/voice`, replays resumed messages into the current call, and handles continue/bring-back actions.
-- `static/css/styles.css` adds a compact handoff banner without changing `static/index.html`.
+- `server.py` exposes `/api/handoff/status` so the Start New Chat modal can discover an active cross-device call before camera/mic permission.
+- `static/index.html` adds the hidden `Continue Call` mode card.
+- `static/js/app.js` assigns browser-local conversation ids, sends `device`, `chat_id`, and `conversation_id` on `/ws/voice`, replays resumed messages into the current call, suppresses duplicate confirmations, and handles continue/bring-back actions.
+- `static/js/app.js` also recovers video input after empty ASR results or WebSocket timing races so VAD does not stay paused after a transfer edge case.
+- `static/css/styles.css` adds a compact modal card, fallback handoff banner, and inline bring-back panel.
 - `bench/test_handoff.py` covers the bidirectional server mechanics without starting the GPU server.
+- Planning archive updated with the completed handoff plan, findings, and progress notes at `.planning/archive/2026-05-06-bidirectional-conversation-handoff/`.
 
 ### Test Status
 
 - Handoff helper smoke: **PASS**.
 - Python/JS syntax checks: **PASS**.
 - Handoff static assertions: **PASS**.
+- Demo prompt E2E suite: **PASS**.
+- Live desktop -> mobile -> desktop handoff smoke: **PASS**.
 - `git diff --check`: **PASS**.
+
+### Key Commits
+
+- `d581518 [feat] add bidirectional conversation handoff`
+- `8ef7bf4 [feat] surface pre-call handoff option`
+- `2fead25 [fix] skip duplicate handoff confirmation`
+- `6b213c4 [fix] skip duplicate bring-back confirmation`
+- `2c47fa5 [fix] render transfer back prompt inline`
+- `0abbd15 [fix] resume video input after empty asr`
+- `731f029 [fix] recover video input on websocket race`
 
 ## 2026-04-30 - WHOOP Integration
 
