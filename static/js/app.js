@@ -21,6 +21,7 @@ let nextPlayTime = null;
 let currentTransientMsg = null;
 let currentUserMsg = null;  // Track current user message being built
 let lastCodebaseResult = null;
+let lastWorkspaceUpdateResult = null;
 
 const logEl = document.getElementById("log");
 const connectionStatusEl = document.getElementById("connectionStatus");
@@ -3287,19 +3288,12 @@ async function handleMessage(data) {
       break;
 
     case "workspace_update_complete":
-      // Workspace update assistant finished - add file summary
+      // Workspace update assistant finished in the background. Keep the live
+      // demo transcript quiet; files are saved for the back-home reveal.
       hideThinkingIndicator();
-      removeEmptyState();
+      lastWorkspaceUpdateResult = data;
       const workspaceFiles = data.files || {};
-      const workspaceSummary = data.summary || "Workspace files updated.";
       const fileList = Object.values(workspaceFiles).filter(Boolean).join("\n");
-      const workspaceMsg = createMessageElement(
-        "assistant",
-        fileList ? `${workspaceSummary}\n\n${fileList}` : workspaceSummary
-      );
-      getActiveConversationEl().appendChild(workspaceMsg.container);
-      scrollToBottom();
-      saveCurrentChat();
       log(`Workspace update completed: ${fileList}`);
       break;
 

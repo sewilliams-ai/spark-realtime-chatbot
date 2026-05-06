@@ -1,3 +1,14 @@
+**Feature: Computex executive-assistant transcript control**
+**Test #0: Team-brief trigger, quiet completion, editable org context, preview base**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python bench/test_computex_workspace.py && .venv-gpu/bin/python bench/test_demo_prompts.py`
+**Result**:
+```bash
+computex workspace routing: PASS
+computex demo prompt e2e: PASS
+```
+**Coverage:** Verifies "send a brief update to the team" routes deterministically to workspace file writing, org/email context is read from `demo_files/computex-demo.yaml`, workspace completion does not add a second assistant chat/TTS turn, and generated MVP preview URLs default to `https://10.110.22.118:8443/generated/...`.
+
 **Feature: Conversation handoff ownership**
 **Test #0: Server-owned transfer and stale-session closure**
 **Status:** PASS

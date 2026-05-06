@@ -7,6 +7,8 @@ relationship_memory:
   past_taipei_gift: pineapple cakes
   recommended_taipei_gift: high mountain oolong tea
 
+team_email: team@spark-demo.local
+
 team:
   - name: Avery
     role: hardware partnerships

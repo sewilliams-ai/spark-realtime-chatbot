@@ -147,3 +147,14 @@ when the server reports a replaced session. Verification passed with Python
 `py_compile`, `node --check static/js/app.js`, `git diff --check`,
 `.venv-gpu/bin/python bench/test_handoff.py`, and
 `.venv-gpu/bin/python bench/test_computex_workspace.py`.
+
+Fixed the remaining executive-assistant demo transcript issues from manual
+testing. The "brief update to the team" phrasing now routes deterministically to
+workspace file generation, the fake org chart/email target is loaded from
+`demo_files/computex-demo.yaml` instead of being duplicated in code, and the
+workspace completion event no longer adds a second assistant message or reads a
+full email/summary aloud. Generated MVP preview links now default to
+`https://10.110.22.118:8443/...` while still allowing env overrides. Verification
+passed with Python `py_compile`, `node --check static/js/app.js`,
+`git diff --check`, `.venv-gpu/bin/python bench/test_computex_workspace.py`, and
+`.venv-gpu/bin/python bench/test_demo_prompts.py`.

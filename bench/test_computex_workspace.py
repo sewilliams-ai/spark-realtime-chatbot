@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import asyncio
 import json
+import os
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -63,6 +64,13 @@ def main() -> int:
         assert "Do not create frontend/, backend/, database/" in prompt
         assert not hasattr(session, "run_codex_codebase_turn")
         assert server._codebase_preview_path("agent_monitor_mvp") == "/generated/agent_monitor_mvp/"
+        old_public_env = {key: os.environ.pop(key, None) for key in ("SPARK_PUBLIC_BASE_URL", "APP_PUBLIC_URL", "PUBLIC_BASE_URL")}
+        try:
+            assert server._codebase_preview_url("agent_monitor_mvp") == "https://10.110.22.118:8443/generated/agent_monitor_mvp/"
+        finally:
+            for key, value in old_public_env.items():
+                if value is not None:
+                    os.environ[key] = value
         rewritten = server._rewrite_codebase_preview_content(
             b'<script>fetch("/api/tasks"); fetch(`/api/status`)</script>',
             "text/html; charset=utf-8",
@@ -129,6 +137,9 @@ ignored
         assert session.is_workspace_update_request("and ask it to share the updates with my team.")
         assert session.is_workspace_update_request("Please share this update with my team.")
         assert session.is_workspace_update_request("please send an update to my team saying that.")
+        assert session.is_workspace_update_request(
+            "field team here in Taipei. And now I just want to send a brief update to the team letting them know how well."
+        )
         sketch_request = (
             "Please convert this sketch to an MVP. "
             "I'm going to dinner, write me a briefer review when I get back."
@@ -167,6 +178,8 @@ ignored
         context = session.build_workspace_update_context("and Q3 of 2026.")
         assert "team@spark-demo.local" in context
         assert "Avery owns hardware partnerships" in context
+        assert server._computex_team_email() == "team@spark-demo.local"
+        assert any(member["name"] == "Avery" for member in server._computex_team_members())
 
         todos = session.extract_workspace_todos("Update my team", request, [])
         assert any("Avery" in item for item in todos), todos
@@ -218,6 +231,10 @@ ignored
         assert routed_types.count("final_response") == 1, routed_types
         assert "workspace_update_complete" in routed_types, routed_types
         assert any("Drafting the email now" in data.get("text", "") for msg_type, data in sent if msg_type == "final_response")
+        assert not any("Done. I drafted" in data.get("text", "") for msg_type, data in sent if msg_type == "final_response")
+        assert not any("Done. I drafted" in data.get("text", "") for msg_type, data in sent if msg_type == "tts")
+        assistant_turns = [msg for msg in session.conversation_history if msg.get("role") == "assistant"]
+        assert len(assistant_turns) == 1, assistant_turns
         routed_team = (root / "workspace" / "team_update.md").read_text()
         assert "Q3 of 2026" in routed_team
         assert "team@spark-demo.local" in routed_team

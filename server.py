@@ -99,6 +99,7 @@ HANDOFF_CONTENT_LIMIT = 4000
 conversation_states: Dict[str, Dict[str, Any]] = {}
 active_conversation_sessions: Dict[str, "VoiceSession"] = {}
 codebase_preview_processes: Dict[str, Dict[str, Any]] = {}
+COMPUTEX_DEMO_YAML = Path(__file__).parent / "demo_files" / "computex-demo.yaml"
 
 
 def _new_conversation_id() -> str:
@@ -215,7 +216,7 @@ def _codebase_preview_public_base() -> str:
         os.environ.get("SPARK_PUBLIC_BASE_URL")
         or os.environ.get("APP_PUBLIC_URL")
         or os.environ.get("PUBLIC_BASE_URL")
-        or "https://localhost:8443"
+        or "https://10.110.22.118:8443"
     )
     return base.rstrip("/")
 
@@ -226,6 +227,64 @@ def _codebase_preview_path(slug: str) -> str:
 
 def _codebase_preview_url(slug: str) -> str:
     return f"{_codebase_preview_public_base()}{_codebase_preview_path(slug)}"
+
+
+def _load_computex_demo_data() -> Dict[str, Any]:
+    path = Path(os.environ.get("COMPUTEX_DEMO_YAML_PATH", COMPUTEX_DEMO_YAML))
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        print(f"[Computex Demo] Failed to load {path}: {exc}")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _computex_team_members() -> List[Dict[str, str]]:
+    data = _load_computex_demo_data()
+    members = data.get("team") or []
+    normalized = []
+    if isinstance(members, list):
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            name = str(member.get("name") or "").strip()
+            role = str(member.get("role") or "").strip()
+            if name and role:
+                normalized.append({"name": name, "role": role})
+    return normalized or [
+        {"name": "Avery", "role": "hardware partnerships"},
+        {"name": "Morgan", "role": "product strategy"},
+        {"name": "Riley", "role": "engineering lead"},
+    ]
+
+
+def _computex_team_email() -> str:
+    data = _load_computex_demo_data()
+    return str(data.get("team_email") or "team@spark-demo.local").strip()
+
+
+def _computex_team_context_lines() -> List[str]:
+    return [f"- {member['name']} owns {member['role']}." for member in _computex_team_members()]
+
+
+def _computex_action_items() -> List[str]:
+    items = []
+    for member in _computex_team_members():
+        role = member["role"].lower()
+        if "hardware" in role:
+            task = "follow up with hardware partners on investment criteria"
+        elif "product" in role:
+            task = "turn dinner insights into partner-facing MVP priorities"
+        elif "engineering" in role:
+            task = "map the Agent Workbench MVP into the next engineering plan"
+        else:
+            task = "capture the relevant follow-up for the partner-facing MVP path"
+        items.append(f"{member['name']}: {task}")
+    return items
 
 
 def _rewrite_codebase_preview_content(content: bytes, content_type: str, slug: str) -> bytes:
@@ -2524,11 +2583,7 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 raw_items.append(item)
 
         if any(term in source_lower for term in ("strategic alignment", "hardware partner", "investment", "invest")):
-            defaults = [
-                "Avery: follow up with hardware partners on investment criteria",
-                "Morgan: turn dinner insights into partner-facing MVP priorities",
-                "Riley: map the Agent Workbench MVP into the next engineering plan",
-            ]
+            defaults = _computex_action_items()
             for item in defaults:
                 if item not in raw_items:
                     raw_items.append(item)
@@ -2685,11 +2740,18 @@ const mobilePath = {json.dumps(str(mobile_path))};
             return False
         direct_phrases = (
             "update my team",
+            "brief update to the team",
+            "brief update for the team",
+            "send a brief update",
+            "write a brief update",
+            "update email to my team",
+            "update email to the team",
             "share the updates with my team",
             "share updates with my team",
             "share this update with my team",
             "share the update with my team",
             "send an update to my team",
+            "send an update to the team",
             "send this update out to my team",
             "send this update to my team",
             "send the update to my team",
@@ -2704,6 +2766,17 @@ const mobilePath = {json.dumps(str(mobile_path))};
             "buy a souvenir",
         )
         if any(phrase in lower for phrase in direct_phrases):
+            return True
+        if "team" in lower and any(term in lower for term in (
+            "brief update",
+            "update email",
+            "send an update",
+            "send a brief",
+            "write an update",
+            "letting them know",
+            "let them know",
+            "field team",
+        )):
             return True
         if self.has_recent_workspace_update_context() and any(term in lower for term in (
             "q3",
@@ -2770,10 +2843,8 @@ const mobilePath = {json.dumps(str(mobile_path))};
             "The strategic alignment dinner went well. Hardware partners are open to investing if we prioritize the partner-facing MVP path and keep the Agent Workbench story concrete.",
             "",
             "Local team context:",
-            "- Avery owns hardware partnerships.",
-            "- Morgan owns product strategy.",
-            "- Riley owns engineering lead.",
-            "- Demo email target: team@spark-demo.local.",
+            *_computex_team_context_lines(),
+            f"- Demo email target: {_computex_team_email()}.",
             "",
             "Action items:",
             action_lines,
@@ -2839,9 +2910,13 @@ const mobilePath = {json.dumps(str(mobile_path))};
         recent = " ".join(recent_parts).lower()
         return any(term in recent for term in (
             "update my team",
+            "brief update",
+            "update to the team",
             "share the update",
             "share this update",
             "send an update",
+            "send a brief update",
+            "field team",
             "team update",
             "action item",
             "hardware partner",
@@ -2864,11 +2939,14 @@ const mobilePath = {json.dumps(str(mobile_path))};
         if current_text.strip() and (not user_turns or user_turns[-1] != current_text.strip()):
             user_turns.append(current_text.strip())
         recent = "\n".join(f"- {turn}" for turn in user_turns[-6:])
+        team_line = "; ".join(
+            f"{member['name']} owns {member['role']}"
+            for member in _computex_team_members()
+        )
         return (
             f"Recent user turns:\n{recent}\n\n"
             "Computex executive-assistant demo. Assume the local dummy org chart is available: "
-            "Avery owns hardware partnerships, Morgan owns product strategy, Riley owns engineering lead, "
-            "and the local demo email target is team@spark-demo.local. "
+            f"{team_line}, and the local demo email target is {_computex_team_email()}. "
             "Treat the user's spoken fragments as one evolving dinner update; do not ask who the team is."
         )
 
@@ -2886,7 +2964,7 @@ const mobilePath = {json.dumps(str(mobile_path))};
             speak_summary=False,
         )
 
-    async def execute_workspace_update_agent(self, task: str, context: str = "", items: list = None, speak_summary: bool = True):
+    async def execute_workspace_update_agent(self, task: str, context: str = "", items: list = None, speak_summary: bool = False):
         """Route Computex executive updates into the shared workspace files."""
         try:
             self._workspace_update_started_at = time.time()
@@ -2897,14 +2975,15 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 "Done. I drafted the team update, action items, and oolong tea todo."
             )
 
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": (
-                    f"{summary} Files: {files['team_update']}, "
-                    f"{files['executive_brief']}, {files['personal_todos']}"
-                )
-            })
-            self.publish_handoff_state()
+            if speak_summary:
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": (
+                        f"{summary} Files: {files['team_update']}, "
+                        f"{files['executive_brief']}, {files['personal_todos']}"
+                    )
+                })
+                self.publish_handoff_state()
             await self.send_message("workspace_update_complete", {
                 "summary": summary,
                 "files": files,
