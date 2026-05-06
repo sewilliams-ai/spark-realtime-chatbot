@@ -3145,6 +3145,8 @@ async function handleMessage(data) {
         openMarkdownEditor(data.task);
       } else if (data.agent_type === "html_assistant") {
         openHtmlEditor(data.task);
+      } else if (data.agent_type === "codebase_assistant") {
+        log(`Codebase assistant writing to ${data.codebase_path || 'workspace'}`);
       } else if (data.agent_type === "reasoning_assistant") {
         // Reasoning now uses inline display, not popup
         log("Reasoning uses inline display");
@@ -3247,6 +3249,23 @@ async function handleMessage(data) {
       scrollToBottom();
       saveCurrentChat();
       log(`Markdown assistant completed: ${data.task.substring(0, 50)}...`);
+      break;
+
+    case "codebase_complete":
+      // Codebase assistant finished - add concise generated-file summary
+      hideThinkingIndicator();
+      removeEmptyState();
+      const codebaseFiles = data.files || {};
+      const codebaseSummary = data.summary || "Codebase generated.";
+      const codebaseList = Object.values(codebaseFiles).filter(Boolean).join("\n");
+      const codebaseMsg = createMessageElement(
+        "assistant",
+        codebaseList ? `${codebaseSummary}\n\n${codebaseList}` : codebaseSummary
+      );
+      getActiveConversationEl().appendChild(codebaseMsg.container);
+      scrollToBottom();
+      saveCurrentChat();
+      log(`Codebase assistant completed: ${codebaseList}`);
       break;
 
     case "workspace_update_complete":

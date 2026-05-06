@@ -4,6 +4,55 @@
 
 - Add a dev-mode launch script that handles CTranslate2 source compilation for DGX Spark/GB10, including environment creation, activation, dependency installation, and launching through `launch-https.sh`.
 
+## 2026-05-06 - Diagram To MVP Codebase Agent
+
+**Status:** Done
+
+### Summary
+
+Added the Beat 1 agentic build path: when Spark sees the Agent Monitor
+whiteboard and the user asks to build or turn it into an MVP, it routes to a
+constrained local coding-agent workflow that creates a runnable ignored
+workspace app plus `mvp_brief.md`, then evaluates it with browser evidence.
+Brief-only/documentation requests still route to `markdown_assistant`.
+
+### Implementation
+
+- `tools.py` adds `codebase_assistant` as a UI-agent sentinel.
+- `prompts.py` distinguishes build requests from brief-only requests and keeps
+  executive-assistant gift todos from being dropped.
+- `server.py` constrains generated MVPs to `workspace/*_mvp/`, tries OpenClaw
+  first, falls back to noninteractive Codex CLI when OpenClaw produces no app
+  files, prunes generated planning/config artifacts, runs one repair pass on
+  browser failure, and saves local evidence under `test_assets/mvp-generation-runs/`.
+- `static/index.html` and `static/js/app.js` expose the checked Codebase
+  Assistant option and render completion details.
+- `.gitignore` now excludes generated `workspace/*_mvp/` app folders.
+- `bench/test_computex_workspace.py`, `bench/test_demo_prompts.py`, and
+  `bench/test_whiteboard_image_prompt.py` cover codebase routing, evaluator
+  behavior, prompt variants, and image-triggered build routing.
+
+### Test Status
+
+- Python syntax checks: **PASS**.
+- Frontend JS syntax check: **PASS**.
+- `git diff --check`: **PASS**.
+- Deterministic Computex workspace/codebase routing: **PASS**.
+- Live Computex prompt E2E with build, brief, menu, and executive variants:
+  **PASS**.
+- Whiteboard image prompt E2E: **PASS**.
+- Real generated MVP workflow: **PASS** via Codex fallback and repair.
+- Browser evaluation: **PASS** with desktop/mobile screenshots and no mobile
+  horizontal overflow.
+- Handoff helper smoke: **PASS**.
+
+### Local Evidence
+
+- Generated MVP: `workspace/agent_monitor_mvp/` (ignored).
+- Final evidence folder: `test_assets/mvp-generation-runs/20260506-173640/`
+  (ignored).
+- Screenshots: `desktop.png`, `mobile.png`.
+
 ## 2026-05-06 - Computex Demo Beats Refresh
 
 **Status:** Done

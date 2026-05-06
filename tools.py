@@ -363,6 +363,32 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
         },
     },
 
+    "codebase_assistant": {
+        "type": "function",
+        "function": {
+            "name": "codebase_assistant",
+            "description": "Starts a local coding-agent workflow to build a runnable MVP codebase in workspace/ from a diagram or sketch. Use when the user asks to build, implement, develop, or create an MVP/app/system from a visible architecture or dashboard sketch, including requests that combine building the MVP with writing a brief for later review. The coding sub-agent should produce a concise FastAPI app, task-history store, and mvp_brief.md architecture brief, then local evaluation saves screenshots/logs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The implementation task, e.g. 'Build the Agent Monitoring MVP from this sketch'"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Visible sketch details, components, data flow, UI sections, and requirements to include in the generated MVP"
+                    },
+                    "output_dir": {
+                        "type": "string",
+                        "description": "Optional single directory name under workspace/. Default: agent_monitor_mvp"
+                    }
+                },
+                "required": ["task"],
+            },
+        },
+    },
+
     "workspace_update_assistant": {
         "type": "function",
         "function": {
@@ -382,7 +408,7 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
                     "items": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional extracted action items or personal todos"
+                        "description": "Optional extracted action items or personal todos. Preserve personal souvenir, husband, partner, pineapple-cake, or gift todos as separate items."
                     }
                 },
                 "required": ["task"],
@@ -1058,7 +1084,7 @@ _INLINE_DISPATCH = {
 
 def is_agent_tool(tool_name: str) -> bool:
     """UI-dispatched agent tools return a sentinel payload; loop should not re-prompt."""
-    return tool_name in ("markdown_assistant", "html_assistant", "reasoning_assistant", "workspace_update_assistant")
+    return tool_name in ("markdown_assistant", "html_assistant", "codebase_assistant", "reasoning_assistant", "workspace_update_assistant")
 
 
 async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -1086,6 +1112,14 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             "agent_type": "html_assistant",
             "task": arguments.get("task", ""),
             "context": arguments.get("context", ""),
+            "status": "initiated",
+        })
+    if tool_name == "codebase_assistant":
+        return json.dumps({
+            "agent_type": "codebase_assistant",
+            "task": arguments.get("task", ""),
+            "context": arguments.get("context", ""),
+            "output_dir": arguments.get("output_dir", "agent_monitor_mvp"),
             "status": "initiated",
         })
     if tool_name == "reasoning_assistant":

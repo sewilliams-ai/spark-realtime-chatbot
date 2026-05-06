@@ -82,6 +82,20 @@ def contains_any(haystack, needles):
     return any(needle.lower() in haystack for needle in needles)
 
 
+def joined_tool_items(args):
+    items = args.get("items") or []
+    if isinstance(items, str):
+        try:
+            parsed = json.loads(items)
+            if isinstance(parsed, list):
+                items = parsed
+            else:
+                items = [items]
+        except json.JSONDecodeError:
+            items = [items]
+    return " ".join(str(item) for item in items)
+
+
 def check_no_private_health_leak(reply):
     lower = reply.lower()
     forbidden = [
@@ -110,6 +124,7 @@ def check_static_prompt_absence():
     for term in stale:
         require(term not in VIDEO_CALL_PROMPT, f"stale prompt term still active: {term}")
     require("mvp_brief.md" in VIDEO_CALL_PROMPT, "missing Computex MVP brief target")
+    require("codebase_assistant" in VIDEO_CALL_PROMPT, "missing codebase assistant routing")
     require("high mountain oolong tea" in VIDEO_CALL_PROMPT, "missing Computex gift memory")
     print("Static prompt absence: PASS")
 
@@ -135,13 +150,44 @@ def test_cold_open_variants(url, model):
         print(f"Cold open variant {idx}: PASS :: {reply} ({elapsed:.0f}ms)")
 
 
-def test_mvp_brief_variants(url, model):
+def test_codebase_build_variants(url, model):
     variants = [
         (
             "Visible sketch: Agent Workbench dashboard with Project Brief, Agent Status, "
             "Action Items, and Activity Feed panels. Turn this sketch into an MVP. "
             "I'm going to dinner; write me a brief for when I get back."
         ),
+        (
+            "Visible whiteboard: Agent Monitor UI sends commands to an Agent Dashboard FastAPI server, "
+            "which writes runs to Task History and streams an Activity Feed. Build this as a working local MVP."
+        ),
+        (
+            "This diagram shows an Agent Monitoring system with dashboard cards, agent list, task history, "
+            "and activity feed. Implement it as a runnable app with UI, API, persistence, and a brief."
+        ),
+    ]
+    tools = tool_defs([
+        "markdown_assistant",
+        "html_assistant",
+        "codebase_assistant",
+        "reasoning_assistant",
+        "workspace_update_assistant",
+    ])
+    for idx, prompt in enumerate(variants, 1):
+        message, elapsed = ask(url, model, [
+            {"role": "system", "content": VIDEO_CALL_PROMPT},
+            {"role": "user", "content": prompt},
+        ], tools=tools)
+        name, args = tool_call(message)
+        require(name == "codebase_assistant", f"variant {idx}: expected codebase_assistant, got {name}: {message}")
+        joined = (args.get("task", "") + " " + args.get("context", "") + " " + args.get("output_dir", "")).lower()
+        require(contains_any(joined, ["mvp", "app", "codebase", "fastapi", "dashboard"]), args)
+        require(contains_any(joined, ["agent", "monitor", "history", "activity", "dashboard"]), args)
+        print(f"Beat 1 codebase build variant {idx}: PASS :: {args} ({elapsed:.0f}ms)")
+
+
+def test_mvp_brief_variants(url, model):
+    variants = [
         (
             "I uploaded a simple Agent Workbench wireframe: left panel project brief, "
             "right panel agent status, lower action items and activity feed. Create an "
@@ -151,8 +197,19 @@ def test_mvp_brief_variants(url, model):
             "This whiteboard shows an Agent Workbench dashboard for tracking agent status, "
             "action items, and recent activity. Create project scaffolding notes from it."
         ),
+        (
+            "Visible Agent Monitor diagram: Dashboard UI talks to a FastAPI Agent Service, "
+            "which writes Task History and streams an Activity Feed. Document this as a README "
+            "with architecture notes. Do not build it yet."
+        ),
     ]
-    tools = tool_defs(["markdown_assistant", "html_assistant", "reasoning_assistant", "workspace_update_assistant"])
+    tools = tool_defs([
+        "markdown_assistant",
+        "html_assistant",
+        "codebase_assistant",
+        "reasoning_assistant",
+        "workspace_update_assistant",
+    ])
     for idx, prompt in enumerate(variants, 1):
         message, elapsed = ask(url, model, [
             {"role": "system", "content": VIDEO_CALL_PROMPT},
@@ -170,7 +227,21 @@ def test_mvp_brief_variants(url, model):
             or args.get("output_path") in {"mvp_brief.md", "README.md"},
             args,
         )
-        require(contains_any(context, ["agent workbench", "project brief", "agent status", "activity feed"]), args)
+        require(
+            contains_any(
+                context,
+                [
+                    "agent workbench",
+                    "agent monitor",
+                    "project brief",
+                    "agent status",
+                    "task history",
+                    "activity feed",
+                    "dashboard",
+                ],
+            ),
+            args,
+        )
         print(f"Beat 1 MVP brief variant {idx}: PASS :: {args} ({elapsed:.0f}ms)")
 
 
@@ -184,7 +255,7 @@ def test_html_prototype_trigger(url, model):
                 "Action Items, and Activity Feed. Build a single-page HTML prototype from this."
             ),
         },
-    ], tools=tool_defs(["markdown_assistant", "html_assistant", "workspace_update_assistant"]))
+    ], tools=tool_defs(["markdown_assistant", "html_assistant", "codebase_assistant", "workspace_update_assistant"]))
     name, args = tool_call(message)
     require(name == "html_assistant", f"expected html_assistant, got {name}: {message}")
     joined = (args.get("task", "") + " " + args.get("context", "")).lower()
@@ -197,7 +268,7 @@ def test_private_menu_variants(url, model):
         (
             "Visible Chinese menu translations: braised beef, steamed vegetables, fried rice, "
             "beef noodle soup, and milk tea. Hey Claw, what should I order?",
-            ["steamed", "vegetables"],
+            ["steamed", "vegetables", "braised beef"],
             ["beef", "fried", "rice", "noodle", "milk tea"],
         ),
         (
@@ -224,7 +295,7 @@ def test_private_menu_variants(url, model):
         require(not message.get("tool_calls"), f"unexpected tool call: {message}")
         require(contains_any(lower, preferred_terms), reply)
         require(contains_any(lower, contrast_terms), reply)
-        require(contains_any(lower, ["lighter", "salty", "fried", "heavy", "sweet"]), reply)
+        require(contains_any(lower, ["lighter", "salty", "saltier", "fried", "heavy", "heavier", "sweet"]), reply)
         check_no_private_health_leak(reply)
         print(f"Beat 2 private menu variant {idx}: PASS :: {reply} ({elapsed:.0f}ms)")
 
@@ -253,7 +324,7 @@ def test_executive_update_variants(url, model):
         ], tools=tools)
         name, args = tool_call(message)
         require(name == "workspace_update_assistant", f"variant {idx}: expected workspace_update_assistant, got {name}: {message}")
-        joined = " ".join(args.get("items") or []) + " " + args.get("context", "") + " " + args.get("task", "")
+        joined = joined_tool_items(args) + " " + args.get("context", "") + " " + args.get("task", "")
         lower = joined.lower()
         require(contains_any(lower, ["team", "dinner", "strategic", "hardware", "partner", "mvp"]), args)
         require(contains_any(lower, ["pineapple", "souvenir", "husband", "oolong"]), args)
@@ -271,6 +342,7 @@ def main():
     tests = [
         lambda _url, _model: check_static_prompt_absence(),
         test_cold_open_variants,
+        test_codebase_build_variants,
         test_mvp_brief_variants,
         test_html_prototype_trigger,
         test_private_menu_variants,

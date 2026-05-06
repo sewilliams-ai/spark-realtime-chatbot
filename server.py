@@ -1128,7 +1128,13 @@ class VoiceSession:
                             is_agent_tool = False
                             for tc in tool_calls:
                                 func = tc.get("function", {})
-                                if func.get("name") in ["markdown_assistant", "html_assistant", "reasoning_assistant", "workspace_update_assistant"]:
+                                if func.get("name") in [
+                                    "markdown_assistant",
+                                    "html_assistant",
+                                    "codebase_assistant",
+                                    "reasoning_assistant",
+                                    "workspace_update_assistant",
+                                ]:
                                     is_agent_tool = True
                                     break
                             
@@ -1143,6 +1149,9 @@ class VoiceSession:
                                         break
                                     if tc.get("function", {}).get("name") == "html_assistant":
                                         feedback_msg = "On it. I'll build the prototype."
+                                        break
+                                    if tc.get("function", {}).get("name") == "codebase_assistant":
+                                        feedback_msg = "On it. I'll start the coding agent and save the evaluation artifacts."
                                         break
                                 else:
                                     feedback_msg = "On it."
@@ -1274,6 +1283,7 @@ class VoiceSession:
                             agent_task = None
                             agent_context = ""
                             agent_output_path = ""
+                            agent_output_dir = "agent_monitor_mvp"
                             agent_items = []
                             for tool_result in tool_results:
                                 try:
@@ -1284,6 +1294,7 @@ class VoiceSession:
                                         agent_task = result_data.get("task", "")
                                         agent_context = result_data.get("context", "")
                                         agent_output_path = result_data.get("output_path", "")
+                                        agent_output_dir = result_data.get("output_dir", "agent_monitor_mvp")
                                         agent_items = result_data.get("items", [])
                                         break
                                 except json.JSONDecodeError:
@@ -1426,6 +1437,14 @@ CRITICAL INSTRUCTIONS:
 
                             elif is_agent_tool and agent_type == "html_assistant":
                                 await self.execute_html_agent(agent_task, agent_context)
+                                return
+
+                            elif is_agent_tool and agent_type == "codebase_assistant":
+                                await self.execute_codebase_agent(
+                                    agent_task or "Build this sketch into a working MVP",
+                                    agent_context,
+                                    agent_output_dir,
+                                )
                                 return
 
                             elif is_agent_tool and agent_type == "workspace_update_assistant":
@@ -1597,9 +1616,508 @@ CRITICAL INSTRUCTIONS:
         path.write_text("", encoding="utf-8")
         return path, str(path.relative_to(WORKSPACE_ROOT))
 
+    def resolve_workspace_codebase_dir(self, output_dir: str = "") -> Path:
+        """Resolve a generated-code directory inside workspace/ without escaping it."""
+        import re
+
+        workspace_dir = WORKSPACE_ROOT / "workspace"
+        requested = (output_dir or "agent_monitor_mvp").strip().replace("\\", "/")
+        if requested.startswith("workspace/"):
+            requested = requested[len("workspace/"):]
+        name = Path(requested).name
+        name = re.sub(r"[^a-zA-Z0-9_-]+", "_", name).strip("_-").lower()
+        if not name:
+            name = "agent_monitor_mvp"
+
+        workspace_resolved = workspace_dir.resolve()
+        output_resolved = (workspace_dir / name).resolve()
+        if workspace_resolved not in output_resolved.parents:
+            output_resolved = workspace_resolved / "agent_monitor_mvp"
+        return output_resolved
+
+    def resolve_mvp_run_dir(self) -> Path:
+        """Create a local ignored folder for per-run evaluation artifacts."""
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        run_dir = WORKSPACE_ROOT / "test_assets" / "mvp-generation-runs" / stamp
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir
+
+    def find_openclaw_binary(self) -> Optional[str]:
+        """Find the OpenClaw executable used for coding sub-agent turns."""
+        candidates = [
+            os.environ.get("OPENCLAW_BIN"),
+            "openclaw",
+            "/home/nvidia/.nvm/versions/node/v22.22.2/bin/openclaw",
+            "/home/nvidia/.nvm/versions/node/v22.22.1/bin/openclaw",
+            "/home/nvidia/selena/vdrs/NeMo-Flow/third_party/openclaw/openclaw.mjs",
+            "/usr/local/bin/openclaw",
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if "/" not in candidate:
+                from shutil import which
+                found = which(candidate)
+                if found:
+                    return found
+                continue
+            path = Path(candidate)
+            if path.exists() and os.access(path, os.X_OK):
+                return str(path)
+        return None
+
+    def find_codex_binary(self) -> Optional[str]:
+        """Find a noninteractive Codex CLI fallback for codebase generation."""
+        candidates = [
+            os.environ.get("CODEX_BIN"),
+            "codex",
+            "/home/nvidia/.nvm/versions/node/v22.22.2/bin/codex",
+            "/home/nvidia/.nvm/versions/node/v22.22.1/bin/codex",
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if "/" not in candidate:
+                from shutil import which
+                found = which(candidate)
+                if found:
+                    return found
+                continue
+            path = Path(candidate)
+            if path.exists() and os.access(path, os.X_OK):
+                return str(path)
+        return None
+
+    def build_codebase_agent_prompt(self, task: str, context: str, output_dir: Path, run_dir: Path) -> str:
+        """Build the constrained prompt for the local coding sub-agent."""
+        return "\n".join([
+            "You are the coding sub-agent for Spark's Computex demo.",
+            "",
+            "Goal: build a high-quality local MVP from the user's visible diagram.",
+            "",
+            "Hard boundaries:",
+            f"- Work only inside this directory: {output_dir}",
+            "- Do not edit the Spark realtime chatbot repo outside that directory.",
+            "- Keep the generated workspace as flat and concise as possible.",
+            "- Prefer these files: app.py, task_history.json, mvp_brief.md.",
+            "- Do not create AGENTS.md, README.md, task_plan.md, findings.md, progress.md, .codex, or planning/config files.",
+            "- If you need to record decisions, put them in mvp_brief.md.",
+            "- Do not create frontend/, backend/, database/, node_modules/, or large asset folders.",
+            "- Do not write secrets or private health data into the generated app.",
+            "",
+            "Expected MVP:",
+            "- A polished operator dashboard UI for Agent Monitor / Agent Dashboard / Task History / Activity Feed.",
+            "- A FastAPI server that serves the UI and exposes JSON API endpoints.",
+            "- A local task-history persistence layer, preferably a single JSON file.",
+            "- A brief with core architecture decisions, data model, API surface, run command, risks, and next steps.",
+            "",
+            "Design quality guidance:",
+            "- Use semantic HTML, one h1, clear landmarks, visible focus states, and accessible contrast.",
+            "- Define CSS tokens near the top of the UI.",
+            "- Make desktop and mobile layouts intentional.",
+            "- Include reduced-motion handling.",
+            "- Avoid decorative bloat, nested card piles, and generic placeholder copy.",
+            "",
+            "Testing/evaluation guidance:",
+            "- Run syntax/import checks for generated code.",
+            "- If you can start the app, inspect it in a browser and fix obvious layout or console issues.",
+            "- Leave notes about any checks you ran in mvp_brief.md.",
+            f"- Spark will also save local evaluation artifacts under: {run_dir}",
+            "",
+            "Visible diagram / user context:",
+            context or "Agent Monitor UI -> Agent Dashboard FastAPI -> Task History database, plus Activity Feed.",
+            "",
+            "User request:",
+            task or "Build this Agent Monitoring sketch into a working MVP.",
+        ])
+
+    def summarize_codebase_files(self, output_dir: Path) -> Dict[str, str]:
+        """Return a small map of generated files for UI display."""
+        files = {}
+        for path in sorted(output_dir.iterdir()) if output_dir.exists() else []:
+            if not path.is_file():
+                continue
+            rel = str(path.relative_to(WORKSPACE_ROOT))
+            stem = path.stem.lower().replace("-", "_")
+            if path.name == "app.py":
+                files["app"] = rel
+            elif path.name == "task_history.json":
+                files["history"] = rel
+            elif path.name == "mvp_brief.md":
+                files["brief"] = rel
+            else:
+                files[stem[:32] or path.suffix.lstrip(".") or "file"] = rel
+        return files
+
+    def codebase_has_required_files(self, output_dir: Path) -> bool:
+        """True when the generated MVP has the expected flat artifact set."""
+        return (
+            (output_dir / "app.py").exists()
+            and (output_dir / "task_history.json").exists()
+            and (output_dir / "mvp_brief.md").exists()
+        )
+
+    async def run_codex_codebase_turn(
+        self,
+        codebase_dir: Path,
+        prompt: str,
+        run_dir: Path,
+        label: str,
+    ) -> tuple[str, str, int]:
+        """Run one noninteractive Codex CLI turn inside the generated workspace."""
+        codex_binary = self.find_codex_binary()
+        if not codex_binary:
+            raise RuntimeError("Codex CLI not found; set CODEX_BIN")
+
+        codex_cmd = [
+            codex_binary,
+            "exec",
+            "--cd",
+            str(codebase_dir),
+            "--skip-git-repo-check",
+            "--ignore-rules",
+            "--sandbox",
+            "workspace-write",
+            "--full-auto",
+            "--model",
+            os.environ.get("CODEX_CODEBASE_MODEL", "gpt-5.4-mini"),
+            prompt,
+        ]
+        codex_proc = await asyncio.create_subprocess_exec(
+            *codex_cmd,
+            cwd=str(codebase_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        codex_timeout_s = int(os.environ.get("CODEX_CODEBASE_TIMEOUT", "900"))
+        stdout_b, stderr_b = await asyncio.wait_for(
+            codex_proc.communicate(),
+            timeout=codex_timeout_s,
+        )
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        safe_label = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in label).strip("_") or "codex"
+        (run_dir / f"{safe_label}_stdout.log").write_text(stdout, encoding="utf-8")
+        (run_dir / f"{safe_label}_stderr.log").write_text(stderr, encoding="utf-8")
+        return stdout, stderr, codex_proc.returncode or 0
+
+    def prune_codebase_workspace(self, output_dir: Path) -> List[str]:
+        """Remove known nonessential artifacts from generated MVP workspaces."""
+        import shutil
+
+        removed = []
+        for name in (
+            ".codex",
+            "AGENTS.md",
+            "README.md",
+            "task_plan.md",
+            "findings.md",
+            "progress.md",
+            "__pycache__",
+        ):
+            path = output_dir / name
+            if not path.exists():
+                continue
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            removed.append(name)
+        return removed
+
+    def write_codebase_eval_summary(
+        self,
+        run_dir: Path,
+        output_dir: Path,
+        files: Dict[str, str],
+        stdout: str,
+        stderr: str,
+        returncode: int,
+        browser_eval: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Persist local, ignored evidence for the generated MVP run."""
+        import py_compile
+
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "agent_stdout.log").write_text(stdout or "", encoding="utf-8")
+        (run_dir / "agent_stderr.log").write_text(stderr or "", encoding="utf-8")
+
+        checks = []
+        app_path = output_dir / "app.py"
+        history_path = output_dir / "task_history.json"
+        brief_path = output_dir / "mvp_brief.md"
+
+        if app_path.exists():
+            try:
+                py_compile.compile(str(app_path), doraise=True)
+                checks.append({"name": "app.py py_compile", "status": "PASS"})
+            except Exception as exc:
+                checks.append({"name": "app.py py_compile", "status": "FAIL", "detail": str(exc)})
+        else:
+            checks.append({"name": "app.py exists", "status": "FAIL"})
+
+        if history_path.exists():
+            try:
+                json.loads(history_path.read_text(encoding="utf-8"))
+                checks.append({"name": "task_history.json parses", "status": "PASS"})
+            except Exception as exc:
+                checks.append({"name": "task_history.json parses", "status": "FAIL", "detail": str(exc)})
+        else:
+            checks.append({"name": "task_history.json exists", "status": "FAIL"})
+
+        if brief_path.exists() and "architecture" in brief_path.read_text(encoding="utf-8").lower():
+            checks.append({"name": "mvp_brief.md includes architecture", "status": "PASS"})
+        else:
+            checks.append({"name": "mvp_brief.md includes architecture", "status": "FAIL"})
+
+        evaluation = {
+            "agent_returncode": returncode,
+            "codebase_path": str(output_dir.relative_to(WORKSPACE_ROOT)),
+            "files": files,
+            "checks": checks,
+            "browser_eval": browser_eval or {"status": "SKIP", "reason": "browser evaluation was not run"},
+            "run_dir": str(run_dir.relative_to(WORKSPACE_ROOT)),
+            "note": "Screenshots and browser logs are saved in this run folder when Playwright evaluation is available.",
+        }
+        (run_dir / "evaluation.json").write_text(json.dumps(evaluation, indent=2) + "\n", encoding="utf-8")
+
+        summary_lines = [
+            "# MVP Generation Evaluation",
+            "",
+            f"- Codebase path: `{evaluation['codebase_path']}`",
+            f"- Agent return code: `{returncode}`",
+            "",
+            "## Files",
+            "",
+        ]
+        summary_lines.extend(f"- `{path}`" for path in files.values())
+        summary_lines.extend(["", "## Checks", ""])
+        for check in checks:
+            detail = f" - {check['detail']}" if check.get("detail") else ""
+            summary_lines.append(f"- {check['status']}: {check['name']}{detail}")
+        summary_lines.extend([
+            "",
+            "## Playwright Evidence",
+            "",
+            f"- Status: `{evaluation['browser_eval'].get('status', 'UNKNOWN')}`",
+        ])
+        if evaluation["browser_eval"].get("url"):
+            summary_lines.append(f"- URL: `{evaluation['browser_eval']['url']}`")
+        for screenshot in evaluation["browser_eval"].get("screenshots", []):
+            summary_lines.append(f"- Screenshot: `{screenshot}`")
+        if evaluation["browser_eval"].get("error"):
+            summary_lines.append(f"- Error: {evaluation['browser_eval']['error']}")
+        (run_dir / "SUMMARY.md").write_text("\n".join(summary_lines).rstrip() + "\n", encoding="utf-8")
+        return evaluation
+
+    def find_node_playwright_module(self) -> Optional[str]:
+        """Find a Node Playwright module path for local browser evaluation."""
+        candidates = [
+            os.environ.get("PLAYWRIGHT_NODE_MODULE"),
+            "/home/nvidia/selena/vdrs/NeMo-Flow/third_party/openclaw/node_modules/playwright",
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            path = Path(candidate)
+            if (path / "index.js").exists():
+                return str(path)
+        return None
+
+    def find_free_local_port(self) -> int:
+        """Reserve a currently free localhost port for generated-app evaluation."""
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+
+    async def wait_for_http_ready(self, url: str, timeout_s: float = 12.0) -> bool:
+        """Poll a local HTTP URL until it responds or times out."""
+        import urllib.request
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            try:
+                def fetch():
+                    with urllib.request.urlopen(url, timeout=1.5) as response:
+                        return response.status
+
+                status = await asyncio.to_thread(fetch)
+                if status < 500:
+                    return True
+            except Exception:
+                await asyncio.sleep(0.3)
+        return False
+
+    async def run_codebase_browser_eval(self, run_dir: Path, output_dir: Path) -> Dict[str, Any]:
+        """Start the generated FastAPI app and capture Playwright-style evidence."""
+        import sys
+
+        app_path = output_dir / "app.py"
+        if not app_path.exists():
+            return {"status": "SKIP", "reason": "workspace app.py does not exist"}
+
+        playwright_module = self.find_node_playwright_module()
+        if not playwright_module:
+            return {"status": "SKIP", "reason": "Node Playwright module not found"}
+
+        python_bin = WORKSPACE_ROOT / ".venv-gpu" / "bin" / "python"
+        if not python_bin.exists():
+            python_bin = Path(sys.executable)
+
+        port = self.find_free_local_port()
+        url = f"http://127.0.0.1:{port}"
+        app_stdout_path = run_dir / "app_stdout.log"
+        app_stderr_path = run_dir / "app_stderr.log"
+        browser_stdout_path = run_dir / "browser_stdout.log"
+        browser_stderr_path = run_dir / "browser_stderr.log"
+        browser_summary_path = run_dir / "browser_eval.json"
+        desktop_path = run_dir / "desktop.png"
+        mobile_path = run_dir / "mobile.png"
+
+        app_proc = await asyncio.create_subprocess_exec(
+            str(python_bin),
+            "-m",
+            "uvicorn",
+            "app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            cwd=str(output_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        browser_proc = None
+        try:
+            ready = await self.wait_for_http_ready(url)
+            if not ready:
+                return {
+                    "status": "FAIL",
+                    "url": url,
+                    "error": "generated app did not become ready",
+                }
+
+            script = f"""
+const fs = require('fs');
+const {{ chromium }} = require({json.dumps(playwright_module)});
+const url = {json.dumps(url)};
+const summaryPath = {json.dumps(str(browser_summary_path))};
+const desktopPath = {json.dumps(str(desktop_path))};
+const mobilePath = {json.dumps(str(mobile_path))};
+
+(async () => {{
+  const browser = await chromium.launch({{ headless: true }});
+  const page = await browser.newPage({{ viewport: {{ width: 1440, height: 1000 }} }});
+  const consoleLogs = [];
+  page.on('console', msg => consoleLogs.push(`${{msg.type()}}: ${{msg.text()}}`));
+  page.on('pageerror', err => consoleLogs.push(`pageerror: ${{err.message}}`));
+
+  await page.goto(url, {{ waitUntil: 'networkidle', timeout: 15000 }});
+  await page.screenshot({{ path: desktopPath, fullPage: true }});
+  const title = await page.title();
+  const h1 = await page.locator('h1').first().textContent().catch(() => '');
+  const bodyText = await page.locator('body').innerText({{ timeout: 5000 }}).catch(() => '');
+  const interactiveCount = await page.locator('button, a, input, select, textarea').count();
+
+  await page.setViewportSize({{ width: 390, height: 844 }});
+  await page.goto(url, {{ waitUntil: 'networkidle', timeout: 15000 }});
+  await page.screenshot({{ path: mobilePath, fullPage: true }});
+  const mobileMetrics = await page.evaluate(() => ({{
+    viewportWidth: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    bodyWidth: document.body ? document.body.scrollWidth : 0
+  }}));
+
+  await browser.close();
+  const horizontalOverflow = mobileMetrics.documentWidth > mobileMetrics.viewportWidth + 4
+    || mobileMetrics.bodyWidth > mobileMetrics.viewportWidth + 4;
+  fs.writeFileSync(summaryPath, JSON.stringify({{
+    ok: !horizontalOverflow,
+    error: horizontalOverflow
+      ? `mobile horizontal overflow: viewport ${{mobileMetrics.viewportWidth}}, document ${{mobileMetrics.documentWidth}}, body ${{mobileMetrics.bodyWidth}}`
+      : '',
+    title,
+    h1,
+    interactiveCount,
+    mobileMetrics,
+    bodyTextSample: bodyText.slice(0, 1200),
+    consoleLogs,
+    screenshots: [
+      {json.dumps(str(desktop_path.relative_to(WORKSPACE_ROOT)))},
+      {json.dumps(str(mobile_path.relative_to(WORKSPACE_ROOT)))}
+    ]
+  }}, null, 2));
+}})().catch(err => {{
+  fs.writeFileSync(summaryPath, JSON.stringify({{ ok: false, error: String(err && err.stack || err) }}, null, 2));
+  process.exit(1);
+}});
+"""
+            script_path = run_dir / "browser_eval.js"
+            script_path.write_text(script, encoding="utf-8")
+            browser_proc = await asyncio.create_subprocess_exec(
+                "node",
+                str(script_path),
+                cwd=str(output_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            browser_stdout, browser_stderr = await asyncio.wait_for(browser_proc.communicate(), timeout=45)
+            browser_stdout_path.write_bytes(browser_stdout)
+            browser_stderr_path.write_bytes(browser_stderr)
+
+            try:
+                browser_summary = json.loads(browser_summary_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                browser_summary = {"ok": False, "error": f"browser summary missing or invalid: {exc}"}
+
+            if browser_proc.returncode == 0 and browser_summary.get("ok"):
+                return {
+                    "status": "PASS",
+                    "url": url,
+                    "screenshots": browser_summary.get("screenshots", []),
+                    "title": browser_summary.get("title", ""),
+                    "h1": browser_summary.get("h1", ""),
+                    "interactive_count": browser_summary.get("interactiveCount", 0),
+                    "console_log_count": len(browser_summary.get("consoleLogs", [])),
+                }
+            return {
+                "status": "FAIL",
+                "url": url,
+                "error": browser_summary.get("error", "browser evaluation failed"),
+            }
+        except asyncio.TimeoutError:
+            return {"status": "FAIL", "url": url, "error": "browser evaluation timed out"}
+        except Exception as exc:
+            return {"status": "FAIL", "url": url, "error": str(exc)}
+        finally:
+            if browser_proc and browser_proc.returncode is None:
+                browser_proc.kill()
+                await browser_proc.communicate()
+            if app_proc.returncode is None:
+                app_proc.terminate()
+                try:
+                    app_stdout, app_stderr = await asyncio.wait_for(app_proc.communicate(), timeout=5)
+                except asyncio.TimeoutError:
+                    app_proc.kill()
+                    app_stdout, app_stderr = await app_proc.communicate()
+            else:
+                app_stdout, app_stderr = await app_proc.communicate()
+            app_stdout_path.write_bytes(app_stdout or b"")
+            app_stderr_path.write_bytes(app_stderr or b"")
+
     def extract_workspace_todos(self, task: str, context: str = "", items: list = None) -> List[str]:
         """Extract Computex action items from tool arguments or debrief context."""
         import re
+
+        if isinstance(items, str):
+            try:
+                parsed_items = json.loads(items)
+                items = parsed_items if isinstance(parsed_items, list) else [items]
+            except Exception:
+                items = [part.strip() for part in re.split(r"[\n;,]+", items) if part.strip()]
 
         raw_items = [str(item).strip() for item in (items or []) if str(item).strip()]
         source = "\n".join([task or "", context or ""])
@@ -1816,6 +2334,158 @@ CRITICAL INSTRUCTIONS:
             import traceback
             traceback.print_exc()
             await self.send_message("error", {"error": f"Workspace update error: {str(e)}"})
+
+    async def execute_codebase_agent(self, task: str, context: str = "", output_dir: str = "agent_monitor_mvp"):
+        """Launch a constrained coding sub-agent and save local evaluation evidence."""
+        try:
+            codebase_dir = self.resolve_workspace_codebase_dir(output_dir)
+            codebase_dir.mkdir(parents=True, exist_ok=True)
+            run_dir = self.resolve_mvp_run_dir()
+
+            await self.send_message("agent_started", {
+                "agent_type": "codebase_assistant",
+                "task": task,
+                "codebase_path": str(codebase_dir.relative_to(WORKSPACE_ROOT)),
+            })
+
+            binary = self.find_openclaw_binary()
+            if not binary:
+                raise RuntimeError("OpenClaw binary not found; set OPENCLAW_BIN")
+
+            prompt = self.build_codebase_agent_prompt(task, context, codebase_dir, run_dir)
+            (run_dir / "agent_prompt.md").write_text(prompt, encoding="utf-8")
+
+            backend = "openclaw"
+            cmd = [
+                binary,
+                "agent",
+                "--local",
+                "--agent",
+                os.environ.get("OPENCLAW_AGENT", "main"),
+                "--message",
+                prompt,
+                "--thinking",
+                os.environ.get("OPENCLAW_CODEBASE_THINKING", "medium"),
+                "--json",
+                "--timeout",
+                os.environ.get("OPENCLAW_CODEBASE_TIMEOUT", "600"),
+            ]
+            print(f"[Voice Session] Launching codebase agent in {codebase_dir}")
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=str(codebase_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            timeout_s = int(os.environ.get("OPENCLAW_CODEBASE_TIMEOUT", "600")) + 20
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+            stdout = stdout_b.decode("utf-8", errors="replace")
+            stderr = stderr_b.decode("utf-8", errors="replace")
+
+            openclaw_failed = (
+                "Cannot convert undefined or null to object" in stderr
+                or (proc.returncode not in (0, None) and not stdout.strip())
+            )
+            files = self.summarize_codebase_files(codebase_dir)
+            if openclaw_failed or not self.codebase_has_required_files(codebase_dir):
+                if self.find_codex_binary():
+                    backend = "codex"
+                    codex_prompt = "\n".join([
+                        prompt,
+                        "",
+                        "OpenClaw did not complete the MVP build, so you are the fallback coding agent.",
+                        "Create the MVP files directly now. Keep the output flat and confined to the current directory.",
+                        "Do not create AGENTS.md, task_plan.md, findings.md, progress.md, README.md, or .codex.",
+                    ])
+                    print(f"[Voice Session] OpenClaw produced no MVP files; launching Codex fallback in {codebase_dir}")
+                    codex_stdout, codex_stderr, proc_returncode = await self.run_codex_codebase_turn(
+                        codebase_dir,
+                        codex_prompt,
+                        run_dir,
+                        "codex",
+                    )
+                    stdout = "\n\n=== OpenClaw stdout ===\n" + stdout + "\n\n=== Codex stdout ===\n" + codex_stdout
+                    stderr = "\n\n=== OpenClaw stderr ===\n" + stderr + "\n\n=== Codex stderr ===\n" + codex_stderr
+                    self.prune_codebase_workspace(codebase_dir)
+                    files = self.summarize_codebase_files(codebase_dir)
+                else:
+                    proc_returncode = proc.returncode or 0
+            else:
+                proc_returncode = proc.returncode or 0
+
+            self.prune_codebase_workspace(codebase_dir)
+            files = self.summarize_codebase_files(codebase_dir)
+            browser_eval = await self.run_codebase_browser_eval(run_dir, codebase_dir)
+            if browser_eval.get("status") == "FAIL" and self.find_codex_binary():
+                backend = f"{backend}+repair"
+                repair_prompt = "\n".join([
+                    "The generated MVP failed browser evaluation.",
+                    f"Error: {browser_eval.get('error', 'unknown error')}",
+                    "",
+                    "Repair the generated app in the current directory.",
+                    "Keep only app.py, task_history.json, and mvp_brief.md unless one extra flat file is strictly necessary.",
+                    "Do not create AGENTS.md, task_plan.md, findings.md, progress.md, README.md, .codex, or nested directories.",
+                    "Make sure `python -m uvicorn app:app` can import and serve the app.",
+                    "If FastAPI route annotations cause response-model errors, remove optional Request annotations or set response_model=None.",
+                    "Update mvp_brief.md with the repair and validation notes.",
+                ])
+                print(f"[Voice Session] Browser evaluation failed; launching Codex repair in {codebase_dir}")
+                repair_stdout, repair_stderr, proc_returncode = await self.run_codex_codebase_turn(
+                    codebase_dir,
+                    repair_prompt,
+                    run_dir,
+                    "codex_repair",
+                )
+                stdout += "\n\n=== Codex repair stdout ===\n" + repair_stdout
+                stderr += "\n\n=== Codex repair stderr ===\n" + repair_stderr
+                self.prune_codebase_workspace(codebase_dir)
+                files = self.summarize_codebase_files(codebase_dir)
+                browser_eval = await self.run_codebase_browser_eval(run_dir, codebase_dir)
+            evaluation = self.write_codebase_eval_summary(
+                run_dir,
+                codebase_dir,
+                files,
+                stdout,
+                stderr,
+                proc_returncode,
+                browser_eval,
+            )
+            evaluation["backend"] = backend
+            (run_dir / "evaluation.json").write_text(json.dumps(evaluation, indent=2) + "\n", encoding="utf-8")
+
+            if proc_returncode == 0 and files:
+                summary = "Done. I built the local MVP codebase and saved evaluation notes."
+            elif files:
+                summary = "I generated partial MVP files and saved the agent/evaluation logs for review."
+            else:
+                summary = "The coding agent did not produce MVP files; I saved the failure logs for review."
+
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": (
+                    f"{summary} Codebase: {evaluation['codebase_path']}. "
+                    f"Evidence: {evaluation['run_dir']}."
+                )
+            })
+            self.publish_handoff_state()
+            await self.send_message("codebase_complete", {
+                "summary": summary,
+                "codebase_path": evaluation["codebase_path"],
+                "files": files,
+                "evaluation": evaluation,
+                "run_dir": evaluation["run_dir"],
+            })
+            await self.stream_tts(summary)
+        except asyncio.TimeoutError:
+            msg = "The coding agent timed out; I saved the run folder for inspection if it was created."
+            print(f"[Voice Session] Codebase agent timeout")
+            await self.send_message("error", {"error": msg})
+            await self.stream_tts(msg)
+        except Exception as e:
+            print(f"[Voice Session] Codebase agent error: {e}")
+            import traceback
+            traceback.print_exc()
+            await self.send_message("error", {"error": f"Codebase agent error: {str(e)}"})
 
     async def execute_markdown_agent(self, task: str, context: str = "", output_path: str = ""):
         """Execute the markdown assistant agent and stream results."""
@@ -2621,11 +3291,14 @@ async def voice_call(websocket: WebSocket):
                                             if tool_name in (
                                                 "markdown_assistant",
                                                 "html_assistant",
+                                                "codebase_assistant",
                                                 "reasoning_assistant",
                                                 "workspace_update_assistant",
                                             ):
                                                 if tool_name == "workspace_update_assistant":
                                                     ack = "Drafting the team update now."
+                                                elif tool_name == "codebase_assistant":
+                                                    ack = "On it. I'll start the coding agent and save the evaluation artifacts."
                                                 else:
                                                     ack = "On it."
                                                 await session.stream_tts(ack, is_transient=True)
@@ -2637,6 +3310,12 @@ async def voice_call(websocket: WebSocket):
                                                     )
                                                 elif tool_name == "html_assistant":
                                                     await session.execute_html_agent(args.get("task", ""), args.get("context", ""))
+                                                elif tool_name == "codebase_assistant":
+                                                    await session.execute_codebase_agent(
+                                                        args.get("task", "Build this sketch into a working MVP"),
+                                                        args.get("context", ""),
+                                                        args.get("output_dir", "agent_monitor_mvp"),
+                                                    )
                                                 elif tool_name == "reasoning_assistant":
                                                     await session.execute_reasoning_agent(
                                                         args.get("problem", ""),

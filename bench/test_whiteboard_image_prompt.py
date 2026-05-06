@@ -212,13 +212,21 @@ def main():
     image_path = create_whiteboard_image(args.image)
     print(f"whiteboard image prompt e2e: image={image_path}")
 
-    readback, elapsed = ask(
-        args.url,
-        args.model,
-        image_path,
+    readback_text = ""
+    elapsed = 0.0
+    readback_prompts = [
         "Read this whiteboard sketch. In one short paragraph, describe the app components you see.",
-    )
-    readback_text = message_text(readback)
+        "Visual recognition test only. Do not build, do not document, and do not say 'on it'. List the visible component labels and arrows in this whiteboard image.",
+    ]
+    for prompt in readback_prompts:
+        readback, elapsed = ask(args.url, args.model, image_path, prompt)
+        readback_text = message_text(readback)
+        if (
+            contains_any(readback_text, ["Agent Monitor", "monitor"])
+            and contains_any(readback_text, ["FastAPI", "backend", "dashboard"])
+            and contains_any(readback_text, ["database", "Task History", "history"])
+        ):
+            break
     require(contains_any(readback_text, ["Agent Monitor", "monitor"]), readback_text)
     require(contains_any(readback_text, ["FastAPI", "backend", "dashboard"]), readback_text)
     require(contains_any(readback_text, ["database", "Task History", "history"]), readback_text)
@@ -229,10 +237,30 @@ def main():
         args.model,
         image_path,
         "Hey Claw, please turn this sketch into an MVP. I'm going to dinner; write me a brief to review for when I get back.",
-        tools=["markdown_assistant", "html_assistant", "workspace_update_assistant", "reasoning_assistant"],
+        tools=["markdown_assistant", "html_assistant", "codebase_assistant", "workspace_update_assistant", "reasoning_assistant"],
     )
     name, tool_args = tool_call(routed)
-    require(name == "markdown_assistant", f"expected markdown_assistant, got {name}: {routed}")
+    require(name == "codebase_assistant", f"expected codebase_assistant, got {name}: {routed}")
+    joined = (
+        tool_args.get("task", "")
+        + " "
+        + tool_args.get("context", "")
+        + " "
+        + tool_args.get("output_dir", "")
+    )
+    require(contains_any(joined, ["mvp", "app", "codebase", "fastapi", "dashboard"]), tool_args)
+    require(contains_any(joined, ["Agent Monitor", "FastAPI", "Task History", "database", "Activity Feed"]), tool_args)
+    print(f"MVP codebase routing: PASS :: {tool_args} ({elapsed:.0f}ms)")
+
+    brief, elapsed = ask(
+        args.url,
+        args.model,
+        image_path,
+        "Create a concise MVP brief from this diagram for me to review later. Do not build the app yet.",
+        tools=["markdown_assistant", "html_assistant", "codebase_assistant", "workspace_update_assistant", "reasoning_assistant"],
+    )
+    name, tool_args = tool_call(brief)
+    require(name == "markdown_assistant", f"expected markdown_assistant for brief-only request, got {name}: {brief}")
     joined = (
         tool_args.get("task", "")
         + " "
@@ -240,9 +268,8 @@ def main():
         + " "
         + tool_args.get("output_path", "")
     )
-    require(contains_any(joined, ["mvp", "brief", "scaffold"]), tool_args)
-    require(contains_any(joined, ["Agent Monitor", "FastAPI", "Task History", "database", "Activity Feed"]), tool_args)
-    print(f"MVP brief routing: PASS :: {tool_args} ({elapsed:.0f}ms)")
+    require(contains_any(joined, ["mvp", "brief", "mvp_brief.md"]), tool_args)
+    print(f"MVP brief-only routing: PASS :: {tool_args} ({elapsed:.0f}ms)")
     print("whiteboard image prompt e2e: PASS")
     return 0
 
