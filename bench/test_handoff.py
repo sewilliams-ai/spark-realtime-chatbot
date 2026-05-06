@@ -32,7 +32,30 @@ class FakeWebSocket:
         self.client_state = WebSocketState.DISCONNECTED
 
 
+class FakeRequest:
+    def __init__(self, **query_params):
+        self.query_params = query_params
+
+
 async def main():
+    server.conversation_states.clear()
+    server.active_conversation_sessions.clear()
+
+    empty_ws = FakeWebSocket()
+    empty_desktop = server.VoiceSession(
+        empty_ws,
+        chat_id="empty_desktop",
+        conversation_id="conv_empty",
+        device_type="desktop",
+    )
+    empty_desktop.call_mode = "video"
+    empty_desktop.publish_handoff_state(include_empty=True)
+    server.active_conversation_sessions["conv_empty"] = empty_desktop
+    empty_status = await server.handoff_status(FakeRequest(device="mobile"))
+    assert empty_status["available"] is True
+    assert empty_status["conversation_id"] == "conv_empty"
+    assert empty_status["call_mode"] == "video"
+
     server.conversation_states.clear()
     server.active_conversation_sessions.clear()
 

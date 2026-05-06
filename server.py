@@ -170,11 +170,11 @@ def _state_available_for_handoff(state: Dict[str, Any], device_type: str) -> boo
     if not conversation_id:
         return False
     owner_session = active_conversation_sessions.get(conversation_id)
-    if not owner_session or not owner_session.alive:
+    if not owner_session or owner_session._ws_closed:
         return False
     if owner_session.device_type == _normalize_device_type(device_type):
         return False
-    return int(state.get("message_count", 0)) > 0
+    return True
 
 
 def _get_handoff_candidate(conversation_id: str, device_type: str) -> Optional[Dict[str, Any]]:
@@ -264,6 +264,23 @@ async def get_default_prompt():
     """Get the default system prompt from prompts.py."""
     from prompts import DEFAULT_SYSTEM_PROMPT
     return {"prompt": DEFAULT_SYSTEM_PROMPT}
+
+
+@app.get("/api/handoff/status")
+async def handoff_status(request: Request):
+    """Return the latest active cross-device handoff candidate, if any."""
+    device_type = request.query_params.get("device", "desktop")
+    state = _get_handoff_candidate("", device_type)
+    if not state:
+        return {"available": False}
+    return {
+        "available": True,
+        "conversation_id": state.get("conversation_id"),
+        "source_device": state.get("owner_device"),
+        "summary": state.get("summary", ""),
+        "message_count": state.get("message_count", 0),
+        "call_mode": state.get("call_mode", "call"),
+    }
 
 
 _WHOOP_OAUTH_STATES: set[str] = set()
@@ -414,7 +431,12 @@ async def index():
         asset_path = STATIC_DIR / rel
         if asset_path.exists():
             v = int(asset_path.stat().st_mtime)
-            html = html.replace(f"/static/{rel}", f"/static/{rel}?v={v}")
+            import re
+            html = re.sub(
+                rf"/static/{re.escape(rel)}(?:\?v=[^\"']*)?",
+                f"/static/{rel}?v={v}",
+                html,
+            )
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
@@ -436,6 +458,7 @@ class VoiceSession:
         self.chat_id = chat_id or f"chat_{uuid.uuid4().hex[:12]}"
         self.conversation_id = conversation_id or _new_conversation_id()
         self.device_type = _normalize_device_type(device_type)
+        self.call_mode = "call"
         self.asr_webm_bytes = bytearray()
         self.asr_pcm = np.zeros(0, dtype=np.float32)
         self.asr_last_text = ""
@@ -496,15 +519,16 @@ class VoiceSession:
             "conversation_history": history,
             "enabled_tools": list(self.enabled_tools),
             "selected_voice": self.selected_voice,
+            "call_mode": self.call_mode,
             "updated_at": time.time(),
             "message_count": len(visible_messages),
             "summary": _handoff_summary(history),
             "messages": visible_messages,
         }
 
-    def publish_handoff_state(self) -> None:
+    def publish_handoff_state(self, include_empty: bool = False) -> None:
         state = self.export_handoff_state()
-        if state["message_count"] <= 0:
+        if state["message_count"] <= 0 and not include_empty:
             return
         conversation_states[self.conversation_id] = state
 
@@ -517,6 +541,7 @@ class VoiceSession:
         )
         self.enabled_tools = list(state.get("enabled_tools") or [])
         self.selected_voice = state.get("selected_voice") or self.selected_voice
+        self.call_mode = state.get("call_mode") or self.call_mode
 
     async def send_message(self, msg_type: str, data: Dict[str, Any] = None):
         """Send a JSON message to the client."""
@@ -2079,6 +2104,7 @@ async def send_handoff_resumed(session: VoiceSession, state: Dict[str, Any]) -> 
         "messages": state.get("messages", []),
         "enabled_tools": session.enabled_tools,
         "voice": session.selected_voice,
+        "call_mode": session.call_mode,
     })
     session.publish_handoff_state()
 
@@ -2120,6 +2146,7 @@ async def voice_call(websocket: WebSocket):
     handoff_pending = bool(handoff_candidate)
     if not handoff_candidate:
         active_conversation_sessions[session.conversation_id] = session
+        session.publish_handoff_state(include_empty=True)
     
     print(f"[Voice Call] Client connected ({session.device_type}, {session.conversation_id})")
     try:
@@ -2135,6 +2162,7 @@ async def voice_call(websocket: WebSocket):
                 "source_device": handoff_candidate.get("owner_device"),
                 "summary": handoff_candidate.get("summary", ""),
                 "message_count": handoff_candidate.get("message_count", 0),
+                "call_mode": handoff_candidate.get("call_mode", "call"),
             })
         else:
             # Wait a moment for frontend to send initial voice selection
@@ -2267,7 +2295,7 @@ async def voice_call(websocket: WebSocket):
                         voice = data.get("voice")
                         if voice:
                             session.selected_voice = voice
-                            session.publish_handoff_state()
+                            session.publish_handoff_state(include_empty=True)
                             await session.send_message("voice_changed", {"voice": voice})
                         else:
                             await session.send_message("error", {"error": "No voice specified"})
@@ -2283,7 +2311,7 @@ async def voice_call(websocket: WebSocket):
                             else:
                                 session.conversation_history.insert(0, {"role": "system", "content": prompt})
                             print(f"[Voice Session] System prompt changed")
-                            session.publish_handoff_state()
+                            session.publish_handoff_state(include_empty=True)
                             await session.send_message("system_prompt_changed", {"prompt": prompt})
                             # Also send the updated prompt so UI can sync
                             await session.send_message("system_prompt", {"prompt": prompt})
@@ -2297,7 +2325,7 @@ async def voice_call(websocket: WebSocket):
                             session.enabled_tools = enabled_tools
                             enabled_tool_defs = _filter_for_demo(get_enabled_tools(enabled_tools))
                             print(f"[Voice Session] Tools updated: {enabled_tools} -> {[t['function']['name'] for t in enabled_tool_defs]}")
-                            session.publish_handoff_state()
+                            session.publish_handoff_state(include_empty=True)
                             await session.send_message("tools_changed", {"tools": enabled_tools})
                         else:
                             await session.send_message("error", {"error": "Invalid tools format"})
@@ -2313,6 +2341,7 @@ async def voice_call(websocket: WebSocket):
                     
                     elif msg_type == "asr_audio":
                         # Voice call: audio only from VAD
+                        session.call_mode = "call"
                         print("[Voice Call] Received asr_audio")
                         audio_b64 = data.get("audio")
                         audio_format = data.get("format", "wav")
@@ -2380,6 +2409,7 @@ async def voice_call(websocket: WebSocket):
                     
                     elif msg_type == "video_call_data":
                         # Video call: audio + image from VAD/PTT
+                        session.call_mode = "video"
                         print("[Video Call] Received video_call_data")
                         # Barge-in: if a Claw turn is mid-stream, cancel it.
                         # The user is talking again — Claw's reply has been

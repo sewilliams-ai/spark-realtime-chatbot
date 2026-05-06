@@ -199,6 +199,7 @@ function getActiveConversationEl() {
 let currentChatId = null;  // Current active chat ID
 let chats = {};  // Store all chats: { chatId: { id, title, preview, timestamp, messages: [] } }
 let handoffPromptEl = null;
+let modalHandoffOffer = null;
 
 // Chat management functions
 function generateChatId() {
@@ -229,6 +230,46 @@ function getClientDeviceType() {
 
 function getDeviceLabel(device) {
   return device === 'mobile' ? 'phone' : 'laptop';
+}
+
+async function fetchHandoffStatus() {
+  const params = new URLSearchParams({ device: getClientDeviceType() });
+  try {
+    const response = await fetch(`/api/handoff/status?${params.toString()}`, { cache: 'no-store' });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.available ? data : null;
+  } catch (error) {
+    log(`Handoff status check failed: ${error.message}`);
+    return null;
+  }
+}
+
+function updateHandoffModeCard(offer) {
+  modalHandoffOffer = offer || null;
+  const card = document.getElementById('handoffModeCard');
+  if (!card) return;
+
+  card.hidden = !offer;
+  if (offer) {
+    const desc = card.querySelector('.chat-mode-card-desc');
+    if (desc) {
+      const source = getDeviceLabel(offer.source_device);
+      const count = Number(offer.message_count || 0);
+      desc.textContent = count > 0
+        ? `Continue ${count} messages from your ${source}`
+        : `Move the active call from your ${source}`;
+    }
+  } else if (selectedChatMode === 'handoff') {
+    selectedChatMode = 'call';
+  }
+  updateModeSelection();
+}
+
+async function refreshHandoffAvailability() {
+  const offer = await fetchHandoffStatus();
+  updateHandoffModeCard(offer);
+  return offer;
 }
 
 function saveChatsToStorage() {
@@ -315,7 +356,7 @@ function loadChatsFromStorage() {
 let selectedChatMode = 'call';
 let selectedTemplate = null;
 
-function openChatModeModal() {
+async function openChatModeModal() {
   log("Opening chat mode modal");
   const modal = document.getElementById('chatModeModal');
   if (!modal) {
@@ -327,6 +368,7 @@ function openChatModeModal() {
   selectedChatMode = 'call';
   selectedTemplate = null;
   updateModeSelection();
+  refreshHandoffAvailability();
   log("Modal opened");
 }
 
@@ -349,10 +391,20 @@ function updateModeSelection() {
   document.querySelectorAll('.chat-mode-card').forEach(card => {
     card.classList.toggle('selected', card.dataset.mode === selectedChatMode);
   });
+
+  const startBtn = document.getElementById('startChatBtn');
+  if (startBtn) {
+    startBtn.textContent = selectedChatMode === 'handoff' ? 'Continue Call' : 'Start Chat';
+  }
 }
 
-function startSelectedChat() {
+async function startSelectedChat() {
   console.log('🚀 [StartChat] startSelectedChat() called, selectedChatMode:', selectedChatMode);
+  if (selectedChatMode === 'handoff') {
+    await startHandoffFromModal();
+    return;
+  }
+
   closeChatModeModal();
   closeMobileSidebar();
   closeHandoffPrompt();
@@ -418,6 +470,66 @@ function startSelectedChat() {
   currentTransientMsg = null;
 
   log(`New ${selectedChatMode} chat created: ${chatId}`);
+}
+
+async function startHandoffFromModal() {
+  const offer = modalHandoffOffer || await fetchHandoffStatus();
+  if (!offer) {
+    alert("No active call is available to continue right now.");
+    updateHandoffModeCard(null);
+    selectedChatMode = 'call';
+    updateModeSelection();
+    return;
+  }
+
+  closeChatModeModal();
+  closeMobileSidebar();
+  closeHandoffPrompt();
+
+  if (currentChatId && chats[currentChatId]) {
+    saveCurrentChat();
+  }
+
+  teardownVoiceCallMode();
+  teardownVideoCallMode();
+
+  const chatId = generateChatId();
+  const now = new Date();
+  const callMode = offer.call_mode === 'video' ? 'video' : 'call';
+  chats[chatId] = {
+    id: chatId,
+    conversationId: offer.conversation_id,
+    title: callMode === 'video' ? '📹 Continued Video Call' : '📞 Continued Voice Call',
+    preview: offer.summary || '',
+    timestamp: now.toISOString(),
+    messages: [],
+    mode: callMode
+  };
+
+  currentChatId = chatId;
+  saveChatsToStorage();
+  renderChatList();
+  loadChat(currentChatId);
+
+  if (callMode === 'video') {
+    await setupVideoCallMode();
+    if (videoConversationEl) {
+      videoConversationEl.innerHTML = `<div class="empty-state">
+        <span class="video-call-mode-badge">📹 Continuing Video Call</span>
+        <br><br>Connecting to the active conversation...
+      </div>`;
+    }
+  } else {
+    await setupVoiceCallMode();
+    conversationEl.innerHTML = `<div class="empty-state">
+      <span class="call-mode-badge">📞 Continuing Voice Call</span>
+      <br><br>Connecting to the active conversation...
+    </div>`;
+  }
+
+  pendingSystemPrompt = systemPromptInput.value.trim();
+  connectVoiceWebSocket();
+  log(`Continuing handoff conversation: ${offer.conversation_id}`);
 }
 
 // ========================================

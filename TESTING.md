@@ -6,7 +6,7 @@
 ```bash
 handoff helper smoke: PASS
 ```
-**Coverage:** Sanitizes handoff history, drops tool-only messages, preserves system prompt/tools/voice, discovers the newest active conversation even when the new device does not know the prior `conversation_id`, exposes offers only to another active device, transfers desktop -> mobile, transfers mobile -> desktop, and TTL-prunes stale state.
+**Coverage:** Sanitizes handoff history, drops tool-only messages, preserves system prompt/tools/voice/call mode, exposes `/api/handoff/status` for the Start New Chat modal before camera/mic permission, discovers the newest active conversation even when the new device does not know the prior `conversation_id`, exposes offers only to another active device, transfers desktop -> mobile, transfers mobile -> desktop, and TTL-prunes stale state.
 
 **Feature: Bidirectional conversation handoff**
 **Test #2: Syntax and static checks**
