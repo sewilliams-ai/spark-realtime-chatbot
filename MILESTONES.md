@@ -4,6 +4,38 @@
 
 - Add a dev-mode launch script that handles CTranslate2 source compilation for DGX Spark/GB10, including environment creation, activation, dependency installation, and launching through `launch-https.sh`.
 
+## 2026-05-06 - Computex Demo Beats Refresh
+
+**Status:** Done
+
+### Summary
+
+Replaced the active hard-coded demo beats with the Computex flow: realtime camera/audio cold open, Agent Workbench MVP brief from a sketch, private health-aware menu recommendation on mobile, executive dinner update with team action items and souvenir memory, and back-home review of generated workspace artifacts.
+
+### Implementation
+
+- `demo_files/computex-demo.yaml` provides committed dummy local context for team roles, dinner setup, and the Taipei gift-memory beat.
+- `prompts.py` appends Computex private context at import time and now steers video calls toward `mvp_brief.md`, private menu guidance, and executive-update/gift behavior.
+- `tools.py` exposes the existing `html_assistant` executor through the tool schema and keeps `workspace_update_assistant` as the multi-file local workspace route.
+- `server.py` routes Agent Workbench briefs, optional HTML prototypes, and executive-update requests into concise local artifacts while removing old handwritten todo/umbrella fallbacks from active behavior.
+- `README.md`, `TESTING.md`, `task_plan.md`, and `progress.md` now describe the Computex script and current regression coverage.
+
+### Test Status
+
+- Live Computex prompt E2E with wording variants: **PASS**.
+- Deterministic Computex workspace routing: **PASS**.
+- Python syntax checks: **PASS**.
+- Frontend JS syntax check: **PASS**.
+- `git diff --check`: **PASS**.
+
+### Key Commits
+
+- `e6aa72b [feat] add Computex demo context fixture`
+- `5da5f47 [feat] refresh prompts for Computex demo beats`
+- `9091129 [feat] route Computex workspace updates`
+- `e4f6101 [feat] add Computex demo prompt tests`
+- `6dfed95 [fix] accept visible menu contrast in prompt test`
+
 ## 2026-05-06 - Bidirectional Conversation Handoff
 
 **Status:** Done

@@ -1,3 +1,47 @@
+**Feature: Computex demo beat refresh**
+**Test #1: Live Computex prompt E2E with wording variants**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python bench/test_demo_prompts.py`
+**Result**:
+```bash
+computex demo prompt e2e: url=http://localhost:11434/v1/chat/completions model=qwen3.6:35b-a3b
+Static prompt absence: PASS
+Cold open variant 1: PASS
+Cold open variant 2: PASS
+Cold open variant 3: PASS
+Beat 1 MVP brief variant 1: PASS
+Beat 1 MVP brief variant 2: PASS
+Beat 1 MVP brief variant 3: PASS
+Beat 1 HTML prototype trigger: PASS
+Beat 2 private menu variant 1: PASS
+Beat 2 private menu variant 2: PASS
+Beat 2 private menu variant 3: PASS
+Beat 3 executive update variant 1: PASS
+Beat 3 executive update variant 2: PASS
+Beat 3 executive update variant 3: PASS
+computex demo prompt e2e: PASS
+```
+**Coverage:** Verifies the current Computex flow: cold open, Agent Workbench MVP brief/scaffold routing, explicit HTML prototype routing, private health menu recommendations without spoken sensitive labels or raw digits, executive update routing, gift-memory grounding, and absence of old fashion/Redis/umbrella prompt strings. Older demo prompt entries below are historical and superseded by this suite.
+
+**Feature: Computex demo beat refresh**
+**Test #2: Deterministic workspace routing**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python bench/test_computex_workspace.py`
+**Result**:
+```bash
+computex workspace routing: PASS
+```
+**Coverage:** Confirms `html_assistant` is exposed, `workspace_update_assistant` remains an agent tool, MVP/team markdown path inference works, `is_workspace_update_request()` accepts the new executive-update script, the old bare "Add these to the project" script no longer triggers workspace writes, and generated workspace sections use `spark-computex-*` markers without old Beat 4 artifacts.
+
+**Feature: Computex demo beat refresh**
+**Test #3: Syntax, JS, and whitespace checks**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python -m py_compile prompts.py server.py tools.py bench/test_demo_prompts.py bench/test_computex_workspace.py && node --check static/js/app.js && git diff --check`
+**Result**:
+```bash
+No output. Commands exited successfully.
+```
+
 **Feature: Bidirectional conversation handoff**
 **Test #1: Server handoff helper smoke**
 **Status:** PASS

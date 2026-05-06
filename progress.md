@@ -76,3 +76,17 @@ bench/test_demo_prompts.py bench/test_computex_workspace.py server.py tools.py
 prompts.py`, `node --check static/js/app.js`, `git diff --check`,
 `.venv-gpu/bin/python bench/test_demo_prompts.py`, and `.venv-gpu/bin/python
 bench/test_computex_workspace.py`; all passed after the harness-only fix.
+
+## Session 2026-05-06 - Phase 5 docs and milestone closeout
+
+Updated the README "Things to try" section to the Computex flow, added a
+superseding TESTING entry for the live Computex prompt E2E and deterministic
+workspace-routing checks, and recorded the completed Computex demo beat refresh
+in `MILESTONES.md`. Marked the active task plan complete. Tests run after docs:
+`.venv-gpu/bin/python -m py_compile prompts.py server.py tools.py
+bench/test_demo_prompts.py bench/test_computex_workspace.py`, `node --check
+static/js/app.js`, `.venv-gpu/bin/python bench/test_computex_workspace.py`,
+`.venv-gpu/bin/python bench/test_handoff.py`, `.venv-gpu/bin/python
+bench/test_demo_prompts.py`, and `git diff --check`; all passed after tightening
+the menu test harness to accept any visible less-ideal menu item with a
+food-language reason. Closeout commit: pending.

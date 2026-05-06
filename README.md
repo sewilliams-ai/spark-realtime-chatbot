@@ -230,9 +230,11 @@ Key files:
 
 ### Things to try
 
-- **Whiteboard → README**: draw a system diagram, show it in video mode, say "convert this into a markdown README."
-- **Architecture review**: show a diagram, ask "what's missing from this design?"
-- **Fashion advisor**: "am I dressed appropriately for a board meeting?"
+- **Cold open**: start video mode and ask "Hey, am I on camera?"
+- **Agent Workbench MVP brief**: show a simple dashboard sketch and say "turn this sketch into an MVP. I'm going to dinner; write me a brief for when I get back."
+- **Private menu recommendation**: hand off to mobile, show a menu, and ask "what should I order?"
+- **Executive update**: say "update my team from dinner, assign action items, and save a souvenir todo for my husband."
+- **Back home review**: hand the call back to desktop and inspect `workspace/mvp_brief.md`, `workspace/team_update.md`, `workspace/executive_brief.md`, and `workspace/personal_todos.md`.
 - **Face recognition**: say "remember my face as Alex," end the call, start a new one — the bot greets you by name.
 
 ---
