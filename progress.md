@@ -87,3 +87,13 @@ and adds an "Open live MVP" link in the chat completion message. Real Qwen
 preview smoke passed in **67.9 seconds** for `workspace/agent_monitor_preview_mvp/`,
 with screenshots and logs saved at
 `test_assets/mvp-generation-runs/20260506-195908/`.
+
+Updated the codebase-agent prompt so the live demo can use a simple natural
+request while hidden local preferences drive the app quality. The prompt now
+tells Qwen to treat sparse hand-drawn sketches as product intent and default to
+a polished 2026 SaaS operations dashboard with KPI cards, status areas,
+commands, task history, activity feed, and realistic seed data. Converted the
+uploaded HEIC sketch to ignored `test_assets/IMG_3324.png`, verified VLM
+readback and routing, then ran a real simple-sketch MVP build: **PASS** on
+attempt 1 in **73.6 seconds**, evidence saved at
+`test_assets/mvp-generation-runs/20260506-203314/`.

@@ -56,6 +56,8 @@ def main() -> int:
         assert "Work only inside this directory" in prompt
         assert "Do not edit the Spark realtime chatbot repo" in prompt
         assert "Output exactly these files: app.py, task_history.json, mvp_brief.md" in prompt
+        assert "Treat sparse hand-drawn sketches as product intent" in prompt
+        assert "polished 2026 SaaS operations dashboard" in prompt
         assert "<<<FILE: app.py>>>" in prompt
         assert "Do not create AGENTS.md" in prompt
         assert "Do not create frontend/, backend/, database/" in prompt

@@ -1,4 +1,14 @@
 **Feature: Qwen codebase assistant**
+**Test #00: Simple sketch quality prompt smoke**
+**Status:** PASS
+**Code Command**: `QWEN_CODEBASE_ATTEMPTS=3 .venv-gpu/bin/python - <<'PY' ... VoiceSession.execute_codebase_agent with test_assets/IMG_3324.png sketch context ... PY`
+**Result**:
+```bash
+SIMPLE_SKETCH_MVP_EVAL_PASS {"attempts": [{"attempt": 1, "duration_seconds": 73.3, "status": "PASS"}], "codebase_path": "workspace/agent_monitor_simple_sketch_mvp", "elapsed_seconds": 73.6, "h1": "Agent Monitor", "interactive_count": 2, "preview_path": "/generated/agent_monitor_simple_sketch_mvp/", "preview_url": "https://localhost:8443/generated/agent_monitor_simple_sketch_mvp/", "run_dir": "test_assets/mvp-generation-runs/20260506-203314", "screenshots": ["test_assets/mvp-generation-runs/20260506-203314/desktop.png", "test_assets/mvp-generation-runs/20260506-203314/mobile.png"]}
+```
+**Coverage:** Verifies the hidden local coding/design preferences can carry the demo story when the spoken prompt remains natural: "please turn this sketch into an MVP, I'm going to dinner..." The generated app passed deterministic checks, browser evaluation, preview startup, and desktop/mobile screenshot capture from the intentionally simple hand sketch.
+
+**Feature: Qwen codebase assistant**
 **Test #0: Live preview proxy smoke**
 **Status:** PASS
 **Code Command**: `QWEN_CODEBASE_ATTEMPTS=3 .venv-gpu/bin/python - <<'PY' ... VoiceSession.execute_codebase_agent + TestClient GET /generated/agent_monitor_preview_mvp/ ... PY`
