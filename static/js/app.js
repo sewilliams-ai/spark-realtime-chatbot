@@ -2441,6 +2441,7 @@ function resumeHandoffFromOffer(data) {
 
 async function bringConversationBack(conversationId) {
   closeHandoffPrompt();
+  pendingModalHandoffResume = { conversation_id: conversationId };
   if (currentChatId && chats[currentChatId]) {
     chats[currentChatId].conversationId = conversationId;
     saveChatsToStorage();
