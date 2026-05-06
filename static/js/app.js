@@ -1124,6 +1124,7 @@ async function sendVideoCallData(audioFloat32) {
   if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) {
     log('WebSocket not connected');
     updateVideoCallStatus('listening', 'Not connected');
+    resumeVideoCallListening('missing WebSocket');
     return;
   }
   
@@ -1169,6 +1170,12 @@ async function sendVideoCallData(audioFloat32) {
     
     reader.onload = async () => {
       const audioBase64 = reader.result.split(',')[1];
+
+      if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) {
+        log('WebSocket disconnected before video call payload send');
+        resumeVideoCallListening('disconnected WebSocket');
+        return;
+      }
       
       // Send video call data with both audio and image
       const payload = {
