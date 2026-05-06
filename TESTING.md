@@ -1,3 +1,14 @@
+**Feature: Conversation handoff ownership**
+**Test #0: Server-owned transfer and stale-session closure**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python bench/test_handoff.py && .venv-gpu/bin/python bench/test_computex_workspace.py`
+**Result**:
+```bash
+handoff helper smoke: PASS
+computex workspace routing: PASS
+```
+**Coverage:** Verifies cross-device handoff state hydration, old-owner websocket transfer closure, stale session closure when a non-owner tries to continue sending audio/control messages, and same-device session replacement so a forgotten browser tab cannot keep listening/responding in parallel.
+
 **Feature: Computex executive-assistant routing**
 **Test #0: Audio-only team update and personal todo routing**
 **Status:** PASS

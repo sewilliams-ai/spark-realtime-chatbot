@@ -200,6 +200,15 @@ def _get_handoff_candidate(conversation_id: str, device_type: str) -> Optional[D
     return max(candidates, key=lambda state: float(state.get("updated_at", 0)))
 
 
+def _should_auto_resume_handoff(session: "VoiceSession", state: Optional[Dict[str, Any]]) -> bool:
+    """True when the connecting client explicitly requested the active conversation."""
+    return bool(
+        state
+        and session.conversation_id
+        and session.conversation_id == state.get("conversation_id")
+    )
+
+
 def _codebase_preview_public_base() -> str:
     """Best-effort external base URL for generated MVP preview links."""
     base = (
@@ -661,10 +670,16 @@ class VoiceSession:
         }
 
     def publish_handoff_state(self, include_empty: bool = False) -> None:
+        active_owner = active_conversation_sessions.get(self.conversation_id)
+        if active_owner is not None and active_owner is not self:
+            return
         state = self.export_handoff_state()
         if state["message_count"] <= 0 and not include_empty:
             return
         conversation_states[self.conversation_id] = state
+
+    def is_active_owner(self) -> bool:
+        return active_conversation_sessions.get(self.conversation_id) is self
 
     async def send_transient_ack(self, message: str) -> None:
         """Show and speak a short acknowledgment as a normal assistant turn."""
@@ -3409,6 +3424,60 @@ async def transfer_conversation_control(
         pass
 
 
+async def close_stale_handoff_session(session: VoiceSession) -> None:
+    """Close a session that no longer owns its conversation."""
+    if session._ws_closed:
+        return
+    active_owner = active_conversation_sessions.get(session.conversation_id)
+    to_device = active_owner.device_type if active_owner else "other"
+    try:
+        await session.send_message("handoff_transferred", {
+            "conversation_id": session.conversation_id,
+            "to_device": to_device,
+            "message": "This conversation is active on another device.",
+        })
+    except Exception:
+        pass
+    session._ws_closed = True
+    try:
+        await session.websocket.close(
+            code=1000,
+            reason="conversation active on another device",
+        )
+    except Exception:
+        pass
+
+
+async def close_replaced_same_device_sessions(new_session: VoiceSession) -> None:
+    """Keep only one active call websocket per device type for the live demo."""
+    replaced = [
+        (conversation_id, session)
+        for conversation_id, session in list(active_conversation_sessions.items())
+        if session is not new_session and session.device_type == new_session.device_type
+    ]
+    for conversation_id, old_session in replaced:
+        active_conversation_sessions.pop(conversation_id, None)
+        conversation_states.pop(conversation_id, None)
+        if old_session._ws_closed:
+            continue
+        try:
+            await old_session.send_message("session_replaced", {
+                "conversation_id": old_session.conversation_id,
+                "device": old_session.device_type,
+                "message": "This device opened a newer call session.",
+            })
+        except Exception:
+            pass
+        old_session._ws_closed = True
+        try:
+            await old_session.websocket.close(
+                code=1000,
+                reason="replaced by another session on this device",
+            )
+        except Exception:
+            pass
+
+
 @app.websocket("/ws/voice")
 async def voice_call(websocket: WebSocket):
     """Persistent voice call WebSocket - handles ASR, LLM, and TTS."""
@@ -3422,6 +3491,7 @@ async def voice_call(websocket: WebSocket):
     handoff_candidate = _get_handoff_candidate(session.conversation_id, session.device_type)
     handoff_pending = bool(handoff_candidate)
     if not handoff_candidate:
+        await close_replaced_same_device_sessions(session)
         active_conversation_sessions[session.conversation_id] = session
         session.publish_handoff_state(include_empty=True)
     
@@ -3434,13 +3504,21 @@ async def voice_call(websocket: WebSocket):
             "device": session.device_type,
         })
         if handoff_candidate:
-            await session.send_message("handoff_available", {
-                "conversation_id": handoff_candidate.get("conversation_id"),
-                "source_device": handoff_candidate.get("owner_device"),
-                "summary": handoff_candidate.get("summary", ""),
-                "message_count": handoff_candidate.get("message_count", 0),
-                "call_mode": handoff_candidate.get("call_mode", "call"),
-            })
+            if _should_auto_resume_handoff(session, handoff_candidate):
+                await close_replaced_same_device_sessions(session)
+                old_session = active_conversation_sessions.get(session.conversation_id)
+                active_conversation_sessions[session.conversation_id] = session
+                await send_handoff_resumed(session, handoff_candidate)
+                await transfer_conversation_control(session, old_session)
+                handoff_pending = False
+            else:
+                await session.send_message("handoff_available", {
+                    "conversation_id": handoff_candidate.get("conversation_id"),
+                    "source_device": handoff_candidate.get("owner_device"),
+                    "summary": handoff_candidate.get("summary", ""),
+                    "message_count": handoff_candidate.get("message_count", 0),
+                    "call_mode": handoff_candidate.get("call_mode", "call"),
+                })
         else:
             # Wait a moment for frontend to send initial voice selection
             await asyncio.sleep(0.2)
@@ -3469,6 +3547,9 @@ async def voice_call(websocket: WebSocket):
                         "conversation_id": handoff_candidate.get("conversation_id") if handoff_candidate else session.conversation_id,
                     })
                     continue
+                if not session.is_active_owner():
+                    await close_stale_handoff_session(session)
+                    break
                 chunk_bytes = msg["bytes"]
                 # Voice-mode barge-in: a Claw turn streaming → user spoke → cancel.
                 if session._claw_in_flight:
@@ -3501,6 +3582,15 @@ async def voice_call(websocket: WebSocket):
                             "conversation_id": handoff_candidate.get("conversation_id") if handoff_candidate else session.conversation_id,
                         })
                         continue
+                    owner_required_messages = {
+                        "asr_end",
+                        "text_message",
+                        "asr_audio",
+                        "video_call_data",
+                    }
+                    if msg_type in owner_required_messages and not session.is_active_owner():
+                        await close_stale_handoff_session(session)
+                        break
                     
                     if msg_type == "asr_end":
                         # User finished speaking

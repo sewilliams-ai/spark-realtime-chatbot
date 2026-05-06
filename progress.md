@@ -135,3 +135,15 @@ turn if the model is still responding. Verification passed with Python
 `py_compile`, `node --check static/js/app.js`, `git diff --check`,
 `.venv-gpu/bin/python bench/test_computex_workspace.py`, and
 `.venv-gpu/bin/python bench/test_demo_prompts.py`.
+
+Investigated duplicate startup voices and laptop responses after phone handoff.
+The server had one `8443` backend process, but logs showed multiple desktop
+websocket sessions from browser tabs reconnecting after reload. Added
+server-owned handoff transfer for clients that connect with the active
+conversation ID, blocked stale non-owner sessions from processing audio/control
+turns, and added same-device session replacement so a forgotten tab is closed
+instead of continuing to listen. The frontend now tears down voice/video capture
+when the server reports a replaced session. Verification passed with Python
+`py_compile`, `node --check static/js/app.js`, `git diff --check`,
+`.venv-gpu/bin/python bench/test_handoff.py`, and
+`.venv-gpu/bin/python bench/test_computex_workspace.py`.

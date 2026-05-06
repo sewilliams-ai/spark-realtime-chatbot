@@ -2551,6 +2551,23 @@ function handleHandoffTransferred(data) {
   log(data.message || 'Conversation transferred to another device.');
 }
 
+function handleSessionReplaced(data) {
+  hideThinkingIndicator();
+  saveCurrentChat();
+  stopTtsPlayback();
+  teardownVoiceCallMode();
+  teardownVideoCallMode();
+  if (voiceWs && voiceWs.readyState === WebSocket.OPEN) {
+    isManualDisconnect = true;
+    try {
+      voiceWs.close();
+    } catch (e) {}
+    voiceWs = null;
+  }
+  setConnectionStatus('disconnected');
+  log(data.message || 'This device opened a newer call session.');
+}
+
 // Markdown Assistant state and functions
 let markdownModalOpen = false;
 let markdownContent = "";
@@ -3060,6 +3077,10 @@ async function handleMessage(data) {
 
     case "handoff_transferred":
       handleHandoffTransferred(data);
+      break;
+
+    case "session_replaced":
+      handleSessionReplaced(data);
       break;
 
     case "handoff_declined":
