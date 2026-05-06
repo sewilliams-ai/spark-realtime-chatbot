@@ -1,133 +1,167 @@
-# Task Plan - Bidirectional Conversation Handoff
+# Task Plan - Computex Demo Beats Refresh
 
 ## Goal
 
-Port the useful handoff mechanics from `main` into `claw`, but implement them
-as a bidirectional conversation handoff layer rather than a laptop-to-phone-only
-feature. A user should be able to start a voice/video conversation on laptop,
-continue it on phone, then move it back to laptop while preserving completed
-conversation context, system prompt, selected voice, and enabled tools.
+Replace the current hard-coded 4-beat demo script with the new Computex story:
+desktop cold open, desktop whiteboard-to-MVP/productivity, mobile private
+health menu ordering, mobile executive-assistant update, and optional desktop
+"back home" review. The implementation should remove old Beat 2 fashion and
+Beat 4 handwritten-umbrella artifacts, preserve the proven WHOOP/privacy and
+handoff work, and keep the code lean by extending existing prompt, tool, test,
+and workspace surfaces.
 
 ## Pattern Audit
 
 ### Top-Level Directories
 
-| Path | Purpose | Handoff relevance |
-|------|---------|-------------------|
-| `clients/` | External-service and model clients (`asr.py`, `llm.py`, `tts.py`, `vlm.py`, `face.py`, `whoop.py`). | Handoff is not an external service, so do not put it here. |
-| `static/` | Browser UI (`index.html`, `css/styles.css`, `js/app.js`). | Add handoff affordances here; prefer CSS classes over `main`'s inline styles. |
-| `demo_files/` | Demo context and local health cache. | No handoff data belongs here; handoff state should stay in memory. |
-| `test_assets/` | Ignored fixtures used by tests. | No runtime dependency. |
-| `scripts/` | Operational scripts such as `refresh-whoop.sh`. | No cron/job required for handoff. |
-| `bench/` | Benchmark and smoke-test scripts. | Existing pattern for WebSocket smoke tests. |
-| `docs/` | Architecture diagram assets/scripts. | Optional documentation only. |
-| `workspace/` | Demo-generated workspace output. | Do not use for conversation state. |
-| `audio_cache/`, `logs/`, venv dirs | Runtime/generated artifacts. | Do not write handoff history here. |
+| Path | Purpose | Demo-beat relevance |
+|------|---------|---------------------|
+| `clients/` | External-service/model clients such as ASR, LLM, TTS, VLM, face, WHOOP, and Claw ACP. | No new client is needed for demo beats. Existing `ask_claw`, WHOOP, VLM, ASR, and TTS clients remain unchanged. |
+| `static/` | Browser UI for voice/video calls, handoff, tool checkboxes, markdown/html editors. | No new UI surface is required for the first pass; existing tool panels and handoff UX are enough. |
+| `demo_files/` | Local demo context files read by the app or tests. | Add one flat Computex/private-memory fixture here if needed; mirror `health-dummy-data.yaml`, not a new directory. |
+| `test_assets/` | Ignored image/fixture assets for prompt tests. | Keep menu fixtures here; add any new sketch/menu images here only if prompt tests need visual assets. |
+| `workspace/` | Generated demo output scratch area. | Clear/regenerate old README/realtime/todo artifacts; keep `.gitkeep`. New Beat 1 and Beat 3 outputs should land here. |
+| `bench/` | Benchmarks and smoke/regression scripts. | Update `bench/test_demo_prompts.py`; do not create another prompt test unless the existing file becomes unwieldy. |
+| `scripts/` | Operational scripts such as WHOOP refresh. | No demo-beat script needed. |
+| `docs/` | Static architecture documentation assets. | No runtime dependency; update only if demo docs need a diagram later. |
+| `audio_cache/`, `logs/`, venv dirs | Runtime/generated local artifacts. | Leave alone. |
+| `.planning/` | Archived planning work. | Keep completed plans archived; active root planning files now describe this Computex demo refresh. |
 
-### Existing Matching Patterns
+### Existing Matching Code And Files
 
-| Existing code | Observation | Design consequence |
-|---------------|-------------|--------------------|
-| `server.py:315-347` | `VoiceSession` owns WebSocket-local state including `conversation_history`, selected voice, tools, camera frame, and connection status. | Handoff should hydrate/publish from `VoiceSession`, not create a parallel session class. |
-| `server.py:883-925`, `server.py:1337-1343` | Text-call path appends user/assistant messages to `conversation_history`. | Publish handoff state after completed assistant responses. |
-| `server.py:2164-2171`, `server.py:2373-2404` | Video-call path separately appends user/assistant messages. | Add publish hooks in video branches too; do not rely only on `process_user_message()`. |
-| `server.py:1974-2004` | Reset, voice, prompt, and tool settings mutate session state. | Update shared conversation state after these settings changes. |
-| `static/js/app.js:198-209`, `static/js/app.js:272-280` | Browser-visible chat history is persisted to `localStorage["spark_realtime_chats"]`. | Existing local browser history remains local; server handoff state is a process-local bridge, not durable storage. |
-| `static/js/app.js:1604-1663` | `saveCurrentChat()` extracts visible messages from DOM into localStorage. | Reuse this for client-history sync when reconnecting/resuming. |
-| `static/js/app.js:2038-2065` | Current WebSocket connects with no query params. | Add `device`, `conversation_id`, and `chat_id` query params; handoff offers should be driven by the WebSocket, not pre-call REST discovery. |
-| `git show main:server.py:66-132` | `main` has in-memory `handoff_snapshots`, sanitization, TTL pruning, and latest-candidate selection. | Reuse the concept, but generalize away from desktop-only snapshots. |
-| `git show main:server.py:343-385` | `main` exports/hydrates system prompt, conversation history, voice, tools, visible messages. | Preserve this payload shape where compatible. |
-| `git show main:server.py:1757-1779` | `main` transfers control to mobile and closes the desktop socket. | Replace with device-agnostic ownership transfer. |
-| `git show main:static/js/app.js:249-445` | `main` adds mobile-only handoff UI with inline DOM styles. | Keep the flow, but move presentation to CSS and make it bidirectional. |
+| Existing code/file | Current behavior | Decision |
+|--------------------|------------------|----------|
+| `prompts.py:_load_claw_persona()` | Injects local Claw persona files into prompt constants. | Use this for real personal/coding preferences when available; do not duplicate those preferences in code. |
+| `prompts.py:_load_health_context()` | Reads `demo_files/health.yaml` or dummy fallback, converts health/WHOOP numbers to qualitative labels, appends to `VIDEO_CALL_PROMPT`. | Keep and reuse for new Beat 2. |
+| `prompts.py:VIDEO_CALL_PROMPT` | Contains cold-open wording, fashion beat, README/realtime tool rules, old handwritten todo rules, exact Redis answer, and health-menu rules. | Replace the old beat-specific section with a concise Computex demo section. |
+| `prompts.py:VISION_TEMPLATE_PROMPTS` | Contains unused/generic fashion, whiteboard, notes templates. | Remove old demo-specific fashion phrasing; keep generic templates only if harmless. |
+| `prompts.py:MARKDOWN_ASSISTANT_PROMPT` | Hard-codes README/realtime design doc shape. | Generalize for MVP briefs and project scaffolding; keep README support as fallback. |
+| `tools.py:ALL_TOOLS` | Has schemas for markdown, workspace update, reasoning, inline tools; frontend has an HTML checkbox but `html_assistant` is missing from tool schemas. | Add `html_assistant` schema only if Beat 1 needs a visible MVP artifact; this extends an existing server/frontend executor, not a new tool family. |
+| `tools.py:is_agent_tool()` / `execute_tool()` | UI agent tool sentinel handling excludes `html_assistant`. | Include `html_assistant` if schema is enabled. |
+| `server.py:execute_html_agent()` | Existing HTML streaming executor. | Reuse for optional MVP/prototype; no new module. |
+| `server.py:infer_markdown_output_path()` | Routes README/realtime/personal/project tasks to workspace markdown paths. | Add Computex paths such as `mvp_brief.md`, `team_update.md`, and `executive_brief.md`. |
+| `server.py:is_workspace_update_request()` | Old Beat 4 handwritten-note short-circuit. | Replace or broaden with new executive-update logic; avoid preserving the umbrella/Redis handwritten script. |
+| `server.py:extract_workspace_todos()` / `apply_workspace_todo_updates()` | Hard-codes old handwritten items and writes `project_dashboard/tasks.md`, `realtime_design.md`, `personal_todos.md`. | Replace old item list and file sections with Computex team update/action-items/personal gift outputs. |
+| `bench/test_demo_prompts.py` | Locked to old Beat 1 README/realtime, Beat 2 fashion, Beat 3 menu, Beat 4 handwritten todos. | Rewrite for new Computex beats and keep it as the main live prompt E2E. |
+| `TESTING.md` | Records old prompt regression output and old deterministic Beat 4 tests. | Add a superseding Computex section; old historical entries can remain lower in the file if clearly superseded. |
+| `README.md` | "Things to try" still lists old whiteboard/fashion examples. | Update to the new Computex demo flow. |
+| `workspace/README.md`, `workspace/realtime_design.md`, `workspace/project_dashboard/tasks.md`, `workspace/personal_todos.md` | Untracked old generated artifacts from the previous demo. | Remove/regenerate during implementation; keep only `.gitkeep` before generating new demo outputs. |
 
-### Proposed New File / Module
+### Proposed New Files Or Modules
 
 | Proposed | Audit result |
 |----------|--------------|
-| `handoff.py` | **Not needed for the first implementation.** `server.py` is long, but the existing precedent in `main` puts handoff helpers in `server.py`, and the feature is tightly coupled to `VoiceSession`, live WebSockets, and route handling. Avoid the new file unless the handoff section becomes too large to keep readable. |
-
-No new top-level package is proposed. No new module is required for the first pass.
+| `demo_files/computex-demo.yaml` | **Mirrors** `demo_files/health-dummy-data.yaml`: one flat YAML demo fixture, not a new package. Use only if we need deterministic org-chart, dinner, and relationship memory without hard-coding those details in the prompt. |
+| New top-level package/module | **Rejected.** Existing homes cover the work. No `demo_beats/`, `executive_assistant.py`, or new top-level directory. |
+| New agent tool name | **Avoid initially.** Prefer generalizing `workspace_update_assistant`. Add `html_assistant` schema only because the server/frontend executor already exists. |
 
 ## Architecture Decision
 
-Use a compact process-local conversation handoff section inside `server.py`,
-next to the existing app globals and `VoiceSession` class. This preserves
-`main`'s proven snapshot/hydrate mechanics while fixing its desktop-only
-assumptions, without adding a new module. The final UX uses both a small
-pre-call discovery route for the Start New Chat modal and WebSocket resume/
-transfer messages for actual control transfer.
+Keep the demo implementation prompt-and-tool driven, with only small
+deterministic server helpers where stage reliability requires a real workspace
+state change. Do not build a separate demo orchestration layer.
 
-The key shift is from `handoff_snapshots[desktop_chat_id]` to
-`conversation_states[conversation_id]`:
+The new demo should be represented in three places:
 
-```python
-ConversationState(
-    conversation_id="conv_...",
-    owner_session_id="session_...",
-    owner_device="desktop" | "mobile",
-    owner_chat_id="chat_...",
-    system_prompt="...",
-    conversation_history=[...],
-    enabled_tools=[...],
-    selected_voice="af_bella",
-    visible_messages=[...],
-    updated_at=...,
-)
-```
+1. `prompts.py` for concise behavior rules and tool selection.
+2. Existing tool/server paths for real artifacts in `workspace/`.
+3. `bench/test_demo_prompts.py` and focused unit checks for regression safety.
 
-`chat_id` remains a browser-local UI id. `conversation_id` becomes the stable
-cross-device id used for ownership transfer.
+Use data files, not prose hard-codes, for reusable private context. Health data
+continues through `_load_health_context()`. If the executive-assistant beat
+needs stable org-chart or gift-memory context, add a single flat
+`demo_files/computex-demo.yaml` plus `_load_computex_demo_context()` in
+`prompts.py`, sibling to `_load_health_context()`.
 
-## Implementation Phases
+## Target Demo Script
+
+| Beat | Device | User moment | Expected behavior | Unlock |
+|------|--------|-------------|-------------------|--------|
+| Cold open | Desktop | "Hey, am I on camera?" | Short confirmation that camera/audio are on and Spark is ready. | Realtime voice/vision confidence. |
+| Beat 1: Whiteboarding/Productivity | Desktop | Show agent dashboard sketch. "Turn this sketch into an MVP. I'm going to dinner; write me a brief for when I get back." | Acknowledge: "On it. I'll use your saved git hygiene and coding preferences." Generate a reviewable MVP brief/scaffold, and optionally an HTML prototype if the HTML agent is enabled and stable. | Vision-enabled local coding/productivity agent. |
+| Beat 2: Restaurant Menu Ordering | Mobile | Show Chinese menu. "What should I order?" | Recommend visible/translated menu items using private health/WHOOP/recent-meal context, but do not speak diagnosis names, medications, sensitive category labels, or raw numbers by default. | Local private health data is safe and useful. |
+| Beat 3: Executive Assistant | Mobile | After dinner: "Update my team: the strategic alignment meeting went amazing... assign action items... save a todo to buy pineapple cakes for my husband." | Produce a team update/action-items artifact and personal todo; respond with gift memory: "You got him pineapple cakes last year, maybe try high mountain oolong tea?" If real outbound messaging is not configured, create the local update artifact rather than pretending in non-demo mode. | Long-context personal/org assistant with local memory. |
+| Beat 4: Back Home | Desktop | Review workspace after mobile handoff. | Show MVP/brief, team update/action items, and personal todo/gift recommendation. | Multi-interface, multi-domain agent continuity. |
+
+## Removal Plan For Old Demo Artifacts
+
+Remove or supersede these old hard-coded behaviors:
+
+- Beat 2 fashion/outfit route from `VIDEO_CALL_PROMPT`, `bench/test_demo_prompts.py`, and README "Things to try".
+- Exact Redis pub/sub answer and "Yeah, do it" `realtime_design.md` follow-up as a core beat.
+- Old handwritten todo route for `add streaming updates`, `Redis pub/sub`, `write events table`, `React hook`, `test reconnect`, and `buy umbrella`.
+- Old transient ack: "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
+- Old generated workspace artifacts: `workspace/README.md`, `workspace/realtime_design.md`, `workspace/project_dashboard/tasks.md`, and `workspace/personal_todos.md` content from the previous script.
+
+Keep these because they still support the new demo:
+
+- Cold-open camera/audio readiness behavior.
+- Health/WHOOP prompt loader and privacy constraints.
+- Bidirectional handoff.
+- Markdown assistant, workspace update assistant, inline todo/messaging tools, and optional HTML assistant executor.
+
+## File-Level Plan
+
+| File | Planned change |
+|------|----------------|
+| `prompts.py` | Replace old demo-beat instructions with Computex flow. Keep cold open and private health rules. Remove fashion and old handwritten/Redis exact scripts. Add `_load_computex_demo_context()` only if using `demo_files/computex-demo.yaml`. |
+| `demo_files/computex-demo.yaml` | Optional new flat fixture for team org chart, dinner context, spouse gift memory, and default action-item mapping. Use comments marking it dummy demo data. |
+| `tools.py` | If using HTML for Beat 1, add `html_assistant` to `ALL_TOOLS`, `is_agent_tool()`, and `execute_tool()` sentinel handling. Otherwise do not touch. |
+| `server.py` | Generalize old workspace update helpers from handwritten-task routing to Computex update routing. Add/refine path inference for `mvp_brief.md`, `team_update.md`, `executive_brief.md`, and `personal_todos.md`. Remove old Beat 4 fallback item list. |
+| `bench/test_demo_prompts.py` | Rewrite live prompt suite for new beats: cold open, MVP/brief tool call, private menu recommendation, executive assistant update/gift memory, and absence of old fashion/umbrella/Redis scripts. |
+| `TESTING.md` | Add a new Computex demo regression section and mark old prompt suite as superseded if necessary. |
+| `README.md` | Update "Things to try" to Computex demo flow. |
+| `MILESTONES.md` | Add a new milestone entry once implementation/tests pass. |
+| `workspace/` | Remove old generated artifacts at implementation start, then let new demo runs regenerate the new MVP/brief/team/todo artifacts. Do not commit generated workspace output unless explicitly requested. |
+
+## Phased Implementation Plan
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Add `server.py` conversation handoff helpers with sanitized conversation state, TTL pruning, candidate selection, and focused unit tests | completed |
-| 2 | Integrate server-side session identity, active-call detection, bidirectional publish/hydrate, and generic transfer control | completed |
-| 3 | Add frontend conversation identity, device detection, WebSocket query params, and local chat-state replay on resume | completed |
-| 4 | Add Teams-style bidirectional UX: show "Continue Call" in the Start New Chat modal when another active device owns a live call, and show a bring-back action on the displaced device | completed |
-| 5 | Add tests/docs: `TESTING.md` entries, static assertions, two-socket desktop->mobile->desktop smoke test, and milestone note | completed |
-| 6 | Live-test UX hardening: remove duplicate confirmations, render bring-back inline, and recover video input after empty ASR or WebSocket timing races | completed |
-
-## File Plan
-
-| File | Change |
-|------|--------|
-| `server.py` | Add a small conversation handoff section for state helpers, then add `conversation_id`, `chat_id`, and `device_type` to `VoiceSession`; publish after completed turns/settings and active-call setup; expose `/api/handoff/status` for modal discovery; hydrate on resume; generic `transfer_conversation_control()`. Keep WHOOP routes, cache busting, `_filter_for_demo`, and barge-in logic intact. |
-| `static/js/app.js` | Add device/conversation ids, WebSocket params, handoff status fetch, modal continue flow, quiet resume, transfer-back handler, duplicate-prompt suppression, and video-input recovery after empty ASR / socket races. Avoid wholesale `main` import. |
-| `static/index.html` | Add a hidden `Continue Call` card to the Start New Chat modal. It is revealed only when `/api/handoff/status` reports another active device/call. |
-| `static/css/styles.css` | Add reusable classes for the modal handoff card, fallback handoff banner, and inline bring-back panel. |
-| `TESTING.md` | Document unit/static/live smoke tests for bidirectional handoff. |
-| `MILESTONES.md` | Add/close a short entry once implementation and tests pass. |
+| 1 | Cleanup and fixture design: remove old generated workspace artifacts, decide whether `demo_files/computex-demo.yaml` is needed, and add it if needed with dummy org/gift context | pending |
+| 2 | Prompt refresh: replace old beat instructions in `VIDEO_CALL_PROMPT` and assistant prompts with the Computex beats while preserving health privacy and cold-open behavior | pending |
+| 3 | Tool/server routing: expose `html_assistant` if needed, generalize workspace update behavior for MVP brief/team update/personal todo, and delete old handwritten-umbrella routing | pending |
+| 4 | Prompt and workflow tests: rewrite `bench/test_demo_prompts.py`; add unit checks for workspace routing and absence of old hard-coded strings | pending |
+| 5 | Docs and milestone closeout: update README, TESTING, MILESTONES, and progress; commit each phase with existing `[feat]`, `[fix]`, `[docs]` format | pending |
 
 ## Tests
 
-1. `python -m py_compile server.py`
-2. `bench/test_handoff.py` unit-smoke test for server-side handoff helpers: sanitize history, preserve system prompt/tools/voice/call mode, prune TTL, expose modal status only for another active device, transfer desktop -> mobile, and transfer mobile -> desktop.
-3. Static JS checks: `node --check static/js/app.js`; assertions for `conversation_id`, `resume_handoff`, `handoff_transferred`, `handoff_required`, and transfer-back button handler.
-4. Regression checks: current `/whoop/login` route remains untouched, health prompt code remains untouched, and `git diff --check` passes.
-5. Live WSS smoke remains optional for a running GPU server: connect with `device=desktop`, complete a turn, check modal availability from `device=mobile`, resume, then bring back from desktop with the same `conversation_id`.
+Use `.venv-gpu/bin/python` for Python checks.
 
-Use `.venv-gpu/bin/python` for Python tests.
+1. Syntax/static:
+   - `.venv-gpu/bin/python -m py_compile prompts.py server.py tools.py bench/test_demo_prompts.py`
+   - `node --check static/js/app.js`
+   - `git diff --check`
+2. Prompt E2E:
+   - `.venv-gpu/bin/python bench/test_demo_prompts.py`
+   - Expected cases: cold open, Beat 1 MVP/brief tool path, Beat 2 private menu, Beat 3 executive update/gift memory, old-beat absence checks.
+3. Unit/sentinel:
+   - Tool schema sentinel includes expected agent tools and no stale `html_assistant` gap if HTML remains enabled in UI.
+   - Workspace update helper writes new Computex files and does not write old `spark-beat4-*` sections.
+   - Health-context privacy Test A remains passing: no raw digits or sensitive labels in `_load_health_context()` output.
+4. Optional live workflow:
+   - Desktop Beat 1 starts artifact generation.
+   - Handoff to mobile.
+   - Mobile menu recommendation passes privacy script.
+   - Mobile executive update writes workspace/todo artifacts.
+   - Bring back to desktop and inspect generated workspace outputs.
 
 ## Acceptance Criteria
 
-- Desktop -> mobile and mobile -> desktop both preserve completed user and assistant messages.
-- The Start New Chat modal shows `Continue Call` only when another active device owns a live call.
-- No handoff offer appears for a single device or inactive conversation.
-- Handoff preserves `system_prompt`, `enabled_tools`, and `selected_voice`.
-- The previous owner receives a clear transfer event and can bring the conversation back without losing context or a second confirmation.
-- Empty ASR results and WebSocket timing races do not leave video VAD stuck in a paused/processing state.
-- No normal conversation history is written to project files, logs, cache, database, or `demo_files` by the handoff layer.
-- Handoff state is process-local and TTL-pruned; server restart loses handoff state by design.
-- Current `claw` changes are preserved: WHOOP OAuth/cron, health context, cache-busted index serving, demo-mode tool filtering, barge-in cancellation, and WebSocket initialization fix.
-- Tests in the plan pass and are recorded in `TESTING.md`.
+- New demo beats are the only current scripted prompt regression path.
+- Old fashion, exact Redis-improvement, handwritten todo, and umbrella demo scripts are removed from active prompts/tests/docs.
+- Cold open still works with a short camera/audio readiness response.
+- Beat 1 reliably creates at least a reviewable MVP brief/scaffold; optional HTML prototype is enabled only if the existing HTML executor is exposed and tested.
+- Beat 2 uses health/WHOOP context without speaking private medical labels or raw numbers by default.
+- Beat 3 creates a concrete team update/action-items artifact and a personal todo/gift recommendation grounded in local demo memory.
+- Beat 4 can show the generated workspace state after handoff back to desktop.
+- No new top-level packages or unnecessary frontend toggles are introduced.
+- Existing WHOOP, handoff, ASR/TTS/VLM, and core tool behavior stay intact.
 
 ## Out Of Scope
 
-- Mid-utterance audio buffer migration.
-- In-flight TTS playback migration.
-- In-flight tool-call migration.
-- Multi-device simultaneous active audio.
-- Durable server-side conversation database.
-- QR-code pairing or authentication beyond same-app/same-network demo assumptions.
+- Real SMTP/email integration unless the user explicitly wants it after the plan.
+- A new database for org/team state.
+- Mid-run autonomous codebase generation beyond the existing agent/tool surfaces.
+- Reworking the handoff system.
+- Changing the WHOOP OAuth/cron architecture.

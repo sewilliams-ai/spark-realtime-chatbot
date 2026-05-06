@@ -1,21 +1,27 @@
-# Progress - Bidirectional Conversation Handoff
+# Progress - Computex Demo Beats Refresh
 
 ## Session 2026-05-06 - planning
 
-Created an isolated planning workspace for the new handoff effort, then moved the active handoff files back to the planning-with-files standard root filenames: `task_plan.md`, `findings.md`, and `progress.md`. Ran the planning skill context restore, read the existing WHOOP planning files before archiving them, ran the session catch-up script, checked git status/log, and audited `claw` plus `main` handoff code without switching branches.
+Started a new active planning-with-files effort for replacing the old demo
+beats with the Computex demo script. Restored the previous root planning
+context, confirmed the completed handoff plan is already archived, ran the
+planning catch-up script, checked git status, read `~/selena/CLAUDE.md`, and
+audited current hard-coded beat behavior across `prompts.py`, `server.py`,
+`tools.py`, `bench/test_demo_prompts.py`, `TESTING.md`, `README.md`,
+`demo_files/`, and `workspace/`.
 
-Findings: current `claw` has no handoff registry or WebSocket query identity; server-side conversation state lives in `VoiceSession.conversation_history`; browser-visible chat history lives in `localStorage["spark_realtime_chats"]`; `main` has useful snapshot/hydrate/transfer mechanics but is desktop-to-mobile only because non-desktop sessions cannot publish snapshots and transfer is hard-coded to mobile. Wrote the implementation plan in `task_plan.md` and research notes in `findings.md`. No implementation changes made.
+Findings: the old script is hard-coded in multiple layers. Cold open remains
+useful. Old Beat 1 README/Redis behavior lives in `VIDEO_CALL_PROMPT`,
+`MARKDOWN_ASSISTANT_PROMPT`, path inference, tests, and docs. Old Beat 2
+fashion lives in `VIDEO_CALL_PROMPT`, an unused fashion template, tests, and
+docs. Old Beat 3 private menu should be kept but moved into the new Beat 2
+story. Old Beat 4 handwritten todos/umbrella lives in prompt rules, deterministic
+server helpers, VLM short-circuit acknowledgements, tests, and untracked
+workspace artifacts. The repo already has an `html_assistant` UI/server
+executor but no `tools.py` schema, making it an optional lean extension for the
+MVP beat.
 
-Planning hygiene update: moved the completed WHOOP/health planning files out of the repo root into `.planning/archive/2026-05-05-whoop-health-agent/`, generated `PLANNING_ARCHIVE.md` for archived plans only, and confirmed the active handoff plan uses the standard root files `task_plan.md`, `findings.md`, and `progress.md`. One `rg` verification command failed due to shell quoting around backticks; reran with simpler patterns and continued.
-
-Plan refinement after user review: removed the separate `handoff.py` file from the recommended first pass. Even though `server.py` is long, the repo and `main` branch precedent keep session/WebSocket glue in `server.py`, so the active plan now calls for a compact conversation-handoff section in `server.py` and extraction only if the implementation becomes too large.
-
-Plan refinement after UX review: changed handoff discovery to in-call only. The offer should appear only when a second device connects while an active call exists, so the plan no longer includes pre-call handoff UI or `/api/handoff/status` for the first pass. Handoff discovery should happen through `/ws/voice` messages.
-
-## Session 2026-05-06 - implementation
-
-Implemented bidirectional conversation handoff in commit `d581518 [feat] add bidirectional conversation handoff`: `server.py` now keeps process-local sanitized handoff state, active owner tracking, pending-handoff guards, latest-active-conversation discovery, bidirectional hydrate/transfer helpers, and publish hooks after completed assistant turns; `static/js/app.js` now sends device/conversation identity on `/ws/voice`, shows the in-call continue prompt, replays resumed messages, and offers bring-back after transfer; `static/css/styles.css` adds the compact handoff banner; `bench/test_handoff.py`, `TESTING.md`, and `MILESTONES.md` record coverage. Tests run: `.venv-gpu/bin/python bench/test_handoff.py`, `.venv-gpu/bin/python -m py_compile server.py bench/test_handoff.py && node --check static/js/app.js`, handoff token static assertions, and `git diff --check`; all passed.
-
-## Session 2026-05-06 - UX and live hardening
-
-Refined the handoff UX after live phone/laptop testing. Commit `8ef7bf4 [feat] surface pre-call handoff option` added `/api/handoff/status` plus a hidden `Continue Call` card in the Start New Chat modal so a second device can transfer an already-active call before selecting camera/mic. Commits `2fead25 [fix] skip duplicate handoff confirmation` and `6b213c4 [fix] skip duplicate bring-back confirmation` made the modal/bring-back action the only confirmation, while still preserving the displaced device's ability to bring the conversation back. Commit `2c47fa5 [fix] render transfer back prompt inline` moved the displaced-device prompt into the conversation area instead of a fixed bottom banner. Commits `0abbd15 [fix] resume video input after empty asr` and `731f029 [fix] recover video input on websocket race` fixed video-call capture edge cases where empty ASR or a WebSocket timing race could leave VAD paused after transfer. Tests run: `node --check static/js/app.js`, `git diff --check`, `.venv-gpu/bin/python -m py_compile server.py bench/test_handoff.py`, `.venv-gpu/bin/python bench/test_handoff.py`, `.venv-gpu/bin/python bench/test_demo_prompts.py`, and live HTTPS/WSS smoke checks for desktop -> mobile -> desktop transfer; all automated checks passed.
+Wrote the new active `task_plan.md` and `findings.md` for the Computex demo
+beats refresh. No runtime code changes or artifact deletion have been executed
+yet; cleanup is Phase 1 of the implementation plan so it can be reviewed and
+committed deliberately.

@@ -1,183 +1,210 @@
-# Findings - Bidirectional Conversation Handoff
+# Findings - Computex Demo Beats Refresh
 
-## Current `claw` State
+## Planning Context Restored
 
-- Runtime check on 2026-05-06: no process was listening on `8443` or `8445`,
-  so current socket failures are connection-refused, not a handoff bug.
-- `server.py:291-308` serves `index.html` with cache-busters for
-  `/static/css/styles.css` and `/static/js/app.js`. This must be preserved;
-  `main`'s older `index()` would regress this.
-- `server.py:315-347` defines `VoiceSession` with WebSocket-local state only.
-  There is no `chat_id`, `conversation_id`, `device_type`, or handoff registry
-  in `claw`.
-- `server.py:339-344` initializes `conversation_history` as one system message.
-  This is the server-side context to hydrate/publish.
-- `server.py:883-925` is the text-call happy path; user message appended at
-  `server.py:889`, assistant message appended at `server.py:921`.
-- `server.py:1337-1343` is another text-call final response append/send path.
-- `server.py:2164-2171` appends video-call user transcription; video-call
-  assistant responses are appended at `server.py:2375-2404` depending on
-  tool/no-tool branches.
-- `server.py:1974-2004` handles reset/system prompt/voice/tool controls.
-  These settings should be included in conversation state.
-- `static/js/app.js:198-209` keeps browser chat state in memory/localStorage,
-  and `static/js/app.js:272-280` loads it from
-  `localStorage["spark_realtime_chats"]`.
-- `static/js/app.js:1604-1663` serializes visible DOM messages to localStorage.
-  This is useful for a reconnect sync message, but it is browser-local.
-- `static/js/app.js:2038-2065` opens `/ws/voice` without query params today.
-- `static/js/app.js:2654-2958` handles JSON messages but has no handoff cases.
+- The completed bidirectional handoff plan was still present in root
+  `task_plan.md`, `findings.md`, and `progress.md`, but it has already been
+  archived at `.planning/archive/2026-05-06-bidirectional-conversation-handoff/`.
+- The planning catch-up script produced no unsynced context output.
+- Current git status before planning showed only pre-existing untracked local
+  files: `.codex`, `AGENTS.md`, and `workspace/*`.
 
-## `main` Handoff Precedent
+## Current Hard-Coded Demo Beats
 
-- `git show main:server.py:66-132` adds process-local `handoff_snapshots` and
-  `active_voice_sessions`, sanitizes model history, summarizes visible
-  messages, prunes stale snapshots, and selects the newest desktop candidate.
-- `git show main:server.py:298-311` adds `/api/handoff/status` for mobile to
-  discover the newest laptop chat. Do not port this for the first pass because
-  the desired UX only shows handoff after a second device connects during an
-  active call.
-- `git show main:server.py:320-385` extends `VoiceSession` with `chat_id` and
-  `device_type`, plus `export_handoff_snapshot()`,
-  `publish_handoff_snapshot()`, and `hydrate_from_handoff_snapshot()`.
-- `git show main:server.py:360-363` blocks publishing from non-desktop
-  sessions. This is the main reason `main` cannot support mobile -> desktop.
-- `git show main:server.py:1740-1754` sends `handoff_resumed` without speaking
-  a fixed handoff line. Keep that quiet-resume behavior.
-- `git show main:server.py:1757-1779` transfers control only to mobile. This
-  should be replaced by a device-agnostic transfer.
-- `git show main:server.py:1786-1810` accepts `device`, `chat_id`, and
-  `handoff_source` query params and can auto-resume from the query.
-- `git show main:server.py:1929-1954` accepts `sync_client_history` to let a
-  browser republish visible messages after refresh.
-- `git show main:static/js/app.js:249-445` implements mobile-only discovery,
-  prompt UI, resume, and local history sync. It works but uses inline styling
-  and laptop-specific language.
-- `git show main:static/js/app.js:2225-2263` adds WebSocket query params and
-  stale-socket protection. Useful to port carefully.
-- `git show main:static/js/app.js:2896-2948` handles
-  `handoff_available`, `handoff_resumed`, `handoff_transferred`,
-  `handoff_declined`, and `handoff_unavailable`.
+### Cold Open
 
-## Current Conversation Persistence
+- `prompts.py:412` explicitly instructs the assistant to answer camera/audio
+  readiness with wording like "Yep. You're on camera, audio is clear, and I'm
+  ready."
+- `bench/test_demo_prompts.py:85-103` tests this cold-open behavior.
+- This remains aligned with the new Computex script and should stay.
 
-- Server-side conversation history is in memory on each `VoiceSession`.
-- Browser-visible chat history is persisted in the browser's `localStorage`
-  under `spark_realtime_chats`.
-- Normal conversation history is not written to a server-side file, cache, or
-  database by `claw`.
-- Server stdout logs do print some transcript/response snippets. The handoff
-  implementation should avoid adding logs that print raw conversation content.
-- Agent/tool flows can write output files (`workspace/`, markdown/html files,
-  personal todo files), but that is tool behavior, not general conversation
-  persistence.
-- WHOOP tokens and health YAML are unrelated to handoff; do not store handoff
-  data in `demo_files/health.yaml`, `whoop_auth.json`, or logs.
+### Old Beat 1 - Whiteboard README + Redis Judgment
 
-## Recommended Data Model
+- `prompts.py:417` describes `markdown_assistant` as the tool for converting a
+  diagram/whiteboard into markdown/README.
+- `prompts.py:421-424` hard-codes README and `realtime_design.md` examples.
+- `prompts.py:447` hard-codes the exact React Dashboard -> FastAPI -> MySQL
+  improvement answer: polling MySQL will not scale, add Redis pub/sub, then
+  use `markdown_assistant` for `realtime_design.md`.
+- `prompts.py:581-582` in `MARKDOWN_ASSISTANT_PROMPT` hard-codes README and
+  realtime design document sections.
+- `server.py:1530-1539` maps tasks containing "readme" to `README.md` and
+  realtime/Redis terms to `realtime_design.md`.
+- `bench/test_demo_prompts.py:106-163` tests the old README, improvement, and
+  realtime follow-up flow.
+- `TESTING.md:168-177`, `TESTING.md:252-253`, and later historical sections
+  record these as active checks.
+- `README.md:233-234` still lists Whiteboard -> README and architecture review
+  as things to try.
 
-Use two ids:
+### Old Beat 2 - Fashion Check
 
-- `chat_id`: browser-local UI id from `static/js/app.js:203-205`.
-- `conversation_id`: stable cross-device id for handoff ownership.
+- `prompts.py:413` embeds video-call outfit-check behavior in the main
+  `VIDEO_CALL_PROMPT`, including "despite the late-night coding."
+- `prompts.py:469-483` includes a fashion template with the same video-call
+  outfit guidance.
+- The `VISION_TEMPLATE_PROMPTS` dictionary appears unused by current frontend
+  code, but stale demo wording there can still confuse future prompt work.
+- `bench/test_demo_prompts.py:166-181` tests fashion as Beat 2.
+- `TESTING.md:179-180`, `TESTING.md:465`, and fashion-specific historical
+  sections record this as a demo behavior.
 
-Use one process-local registry concept in `server.py`:
+### Old Beat 3 - Private Menu
 
-```python
-@dataclass
-class ConversationState:
-    conversation_id: str
-    owner_session_id: str
-    owner_device: str
-    owner_chat_id: str
-    system_prompt: str
-    conversation_history: list[dict[str, str]]
-    enabled_tools: list[str]
-    selected_voice: str
-    visible_messages: list[dict[str, str]]
-    updated_at: float
-    message_count: int
-    summary: str
+- `prompts._load_health_context()` at `prompts.py:318-337` returns the private
+  health prompt block. It still includes a generic example phrase
+  "after yesterday's ramen" at `prompts.py:330`.
+- `prompts.py:449-455` contains active private health/menu behavior:
+  health-shaped questions use private context, Chinese menus are silently
+  translated, and recommendations must use visible menu items without spoken
+  private labels or raw numbers.
+- `demo_files/health-dummy-data.yaml` contains the current dummy health,
+  recent meals, jetlag/run, and WHOOP values. It already supports the new
+  restaurant-menu beat.
+- `bench/test_demo_prompts.py:184-211` tests the private menu recommendation.
+- This beat remains, but it moves from old Beat 3 to new Beat 2 and should be
+  rewritten around the Computex/Taipei dinner story.
+
+### Old Beat 4 - Handwritten Todos + Umbrella
+
+- `prompts.py:418` describes `workspace_update_assistant` as routing
+  handwritten todos to `project_dashboard/tasks.md`, `realtime_design.md`,
+  and `personal_todos.md`.
+- `prompts.py:426-430` hard-codes the old handwritten list, including
+  "add streaming updates", "Redis pub/sub", "write events table",
+  "React hook", "test reconnect", and "buy umbrella".
+- `prompts.py:430` hard-codes the spoken acknowledgment about the
+  React/FastAPI/MySQL project dashboard.
+- `server.py:1587-1628` extracts old handwritten todo items and falls back to
+  that exact list when the user says "add these to the project."
+- `server.py:1639-1656` normalizes old todo wording, including "buy umbrella".
+- `server.py:1658-1669` routes "umbrella" and other personal keywords to
+  personal todos.
+- `server.py:1671-1686` detects old Beat 4 handwritten-note commands before
+  VLM tool roundtrip.
+- `server.py:1710-1757` writes old Beat 4 sections into
+  `project_dashboard/tasks.md`, `realtime_design.md`, and
+  `personal_todos.md` using `spark-beat4-*` markers.
+- `server.py:2491-2500` has a VLM image-branch short-circuit for old Beat 4
+  with the hard-coded React/FastAPI/MySQL acknowledgement.
+- `server.py:2597-2599` repeats the same acknowledgement when the model calls
+  `workspace_update_assistant`.
+- `bench/test_demo_prompts.py:214-238` tests old Beat 4 handwritten todos.
+- `TESTING.md:185-187`, `TESTING.md:240-283`, and later sections record old
+  Beat 4 as an active regression.
+- Untracked generated workspace files currently contain old Beat 4 output:
+  `workspace/realtime_design.md`, `workspace/project_dashboard/tasks.md`, and
+  `workspace/personal_todos.md`.
+
+## Existing Tool And Agent Surfaces
+
+- `tools.py:37` defines `ALL_TOOLS`. Current tool names are:
+  `read_file`, `write_file`, `list_files`, `run_python`, `web_search`,
+  `remember_fact`, `recall_fact`, `add_todo`, `list_todos`, `complete_todo`,
+  `claw_recall`, `claw_remember`, `send_telegram`, `ask_claw`,
+  `markdown_assistant`, `workspace_update_assistant`, and
+  `reasoning_assistant`.
+- `static/index.html:345-347` already has an `html_assistant` checkbox, and
+  `server.py:1864-1927` already implements `execute_html_agent()`, but
+  `tools.py` has no `html_assistant` schema or sentinel. If Beat 1 should
+  visibly build an MVP artifact, exposing this existing executor is the
+  leanest path.
+- `server.py:1062-1450` runs the main LLM/tool loop for text/voice messages.
+  It already has UI-agent handling for `markdown_assistant`,
+  `reasoning_assistant`, and `workspace_update_assistant`.
+- `server.py:2487-2726` runs the video-call image path. It includes the old
+  Beat 4 short-circuit before regular VLM/tool handling.
+- `prompts.py:28-55` has `CLAW_DEMO_MODE`, which makes non-wired real-world
+  actions sound confidently done and strips `ask_claw` from tool definitions.
+  For a rock-solid demo, prefer concrete local workspace artifacts over
+  pretending an email was sent unless the user intentionally runs demo mode.
+
+## Workspace State
+
+Current untracked workspace artifacts are from the previous script:
+
+- `workspace/README.md`: old agent dashboard README generated from a sketch.
+- `workspace/realtime_design.md`: old Redis pub/sub realtime design plus
+  `spark-beat4-realtime-followup`.
+- `workspace/project_dashboard/tasks.md`: old handwritten engineering tasks.
+- `workspace/personal_todos.md`: old "Buy umbrella" personal todo.
+
+The repo tracks only `workspace/.gitkeep`; generated workspace files are local
+scratch artifacts. It is appropriate to remove or regenerate them as part of
+the implementation cleanup phase.
+
+## Recommended New Demo Data
+
+To avoid putting the new executive-assistant story directly into the prompt,
+use a single flat YAML fixture if deterministic memory is needed:
+
+```yaml
+# demo_files/computex-demo.yaml - DUMMY DATA FOR DEMO/TESTING ONLY.
+relationship_memory:
+  partner_label: husband
+  past_taipei_gift: pineapple cakes
+  recommended_taipei_gift: high mountain oolong tea
+team:
+  - name: Avery
+    role: hardware partnerships
+  - name: Morgan
+    role: product strategy
+  - name: Riley
+    role: engineering lead
+dinner_context:
+  default_meeting: strategic alignment dinner with hardware partners
+  default_action_theme: prioritize the partner-facing MVP path
 ```
 
-`server.py` should keep live sockets separately:
+If added, load it through `_load_computex_demo_context()` in `prompts.py`,
+sibling to `_load_health_context()`, and append it to `VIDEO_CALL_PROMPT`.
+This mirrors the existing prompt-loader pattern and keeps the new memory
+editable without another package.
 
-```python
-active_voice_sessions: dict[str, VoiceSession]  # keyed by session_id
-conversation_states: dict[str, ConversationState]  # keyed by conversation_id
-```
+## Recommended Implementation Shape
 
-Do not add `handoff.py` in the first pass. Although `server.py` is already
-large, the existing `main` precedent keeps handoff helpers in `server.py`, and
-the feature is mostly glue around `VoiceSession`, active WebSockets, and the
-`/ws/voice` route. Revisit extraction only if the handoff section grows large
-enough that it obscures the existing route/session flow.
+- Keep cold open as-is.
+- Replace the old Beat 1 exact README/Redis flow with "MVP brief/scaffold from
+  sketch." Make the reliable baseline a markdown artifact such as
+  `workspace/mvp_brief.md` or `workspace/agent_dashboard_mvp.md`. Expose the
+  existing HTML assistant only if we want a visual prototype and can test it.
+- Keep private menu logic, but rewrite the prompt/test around the Computex
+  story: Chinese menu, private health data, WHOOP/recent meals, no spoken
+  private labels/numbers.
+- Replace old Beat 4 handwritten routing with new executive update routing:
+  team update/action items plus personal souvenir todo. Prefer local
+  `workspace/team_update.md` / `workspace/executive_brief.md` artifacts and
+  `personal_todos.md` over real email integration in P0.
+- If the user later wants real sending, add/configure a real outbound channel
+  after the script is stable. Current `send_telegram` can send if a bot and
+  chat/alias are configured; there is no SMTP/email client in the repo.
 
-## UX Recommendation
+## Open Product Decision For Implementation
 
-Match Teams-style transfer semantics for the demo:
+The script says "sends an email." The repo does not currently have a real
+email tool. P0 should choose one of these before implementation:
 
-1. First device starts a call normally; no handoff UI appears.
-2. When a second device opens the app while that call is active, the Start New
-   Chat modal polls `/api/handoff/status` and reveals a third `Continue Call`
-   option only if another active device owns a live call.
-3. If accepted, the new device opens the correct call mode, sends
-   `resume_handoff`, hydrates from the latest completed state, and becomes
-   the owner.
-4. The previous device stops mic/camera/TTS, shows "Continued on phone/laptop"
-   inline where conversation content appears, and offers "Bring back".
-5. Clicking "Bring back" opens a fresh WebSocket with the same
-   `conversation_id`, hydrates from the latest state, and transfers ownership
-   back.
+1. **Recommended for stability:** create a local `workspace/team_update.md`
+   artifact and speak "Drafting the email now." This is honest and inspectable.
+2. **Demo-mode theater:** with `CLAW_DEMO_MODE=1`, speak as if sent. This is
+   less inspectable and should not be the only proof point.
+3. **Real outbound:** wire SMTP or configure a Telegram/team alias. This is
+   more work and more failure-prone than the beat requires.
 
-This is not mid-stream migration. It is context-preserving transfer at turn
-boundaries, which is the right complexity for this repo and demo.
+## Risks
 
-The final flow intentionally avoids double confirmation: the modal/bring-back
-button is the confirmation, and the subsequent WebSocket `handoff_available`
-message auto-resumes when it matches that pending choice. The fallback bottom
-banner remains only for direct WebSocket offers outside the modal path.
-
-## Live-Test Findings 2026-05-06
-
-- The first implementation's WebSocket-only offer appeared only after the
-  user had already selected a call mode and granted camera/mic. That was too
-  late for the desired UX. Adding `/api/handoff/status` and a hidden
-  `Continue Call` card in `static/index.html` lets the second device transfer
-  an active call from the Start New Chat modal.
-- Laptop -> mobile and mobile -> laptop transfer both worked after adding
-  quiet auto-resume for a pending modal or bring-back choice. Without that
-  guard, the accepting device saw a second "Continue here?" prompt after it
-  had already chosen to transfer.
-- The displaced device's bring-back UI is better as an inline panel inside
-  the conversation area than as a fixed bottom banner. The fixed banner
-  remains as a fallback prompt for unplanned `handoff_available` events.
-- A video-call reliability bug appeared after repeated transfers: the backend
-  received `video_call_data`, but ASR returned an empty transcript. The
-  frontend previously ignored empty `asr_result`, leaving
-  `videoCallProcessing` true and VAD paused until the 30-second fallback.
-  `resumeVideoCallListening()` now clears the processing/speaking flags,
-  restores the listening status, and restarts VAD for empty ASR results.
-- A related timing race existed if VAD captured speech before the resumed
-  WebSocket was open, or if the WebSocket closed between WAV conversion and
-  payload send. Those branches now recover through the same
-  `resumeVideoCallListening()` helper instead of leaving video input stuck.
-
-## Risks / Gotchas
-
-- `main` is older than `claw` in important places. Do not merge whole files:
-  it would risk losing WHOOP routes, health prompt behavior, cache-busted
-  index serving, `_filter_for_demo`, barge-in handling, and the recent socket
-  initialization fix.
-- The current frontend's `createMessageElement()` appends to the active DOM.
-  Handoff replay should verify whether it returns `{container, content}` or a
-  DOM node at the call site to avoid double-appending.
-- Handoff state should publish after completed assistant messages, not after
-  every partial/transient response.
-- Tool-call messages with `content: None` must be excluded from visible and
-  model-safe handoff history, matching `main`'s sanitization.
-- Device detection is heuristic. Use it only for UX defaults; server should
-  accept explicit `device` query params.
-- If two tabs on the same device are open, "same device" should not prevent
-  explicit resume by `conversation_id`; it should only suppress automatic
-  offers.
+- The current demo behaviors are spread across prompt text, server helper
+  methods, tool schemas, prompt tests, docs, and local workspace artifacts.
+  Removing only one layer will leave stale old-beat behavior.
+- `CLAW_DEMO_MODE` can hide gaps by speaking as if real actions happened.
+  Useful for theater, risky for debugging. Tests should run in normal mode
+  unless explicitly validating demo-mode wording.
+- Adding a new top-level module for demo orchestration would be avoidable
+  bloat. Existing `prompts.py`, `server.py`, `tools.py`, and `workspace/`
+  are the right homes.
+- The model may over-say private health details in the menu beat unless
+  prompt tests continue asserting forbidden terms and raw digits.
+- The "MVP" beat can become too ambitious if it requires full autonomous code
+  generation live. The plan should guarantee a brief/scaffold first, then
+  optionally add the HTML prototype path once stable.
