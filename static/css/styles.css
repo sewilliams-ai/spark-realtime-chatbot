@@ -1928,6 +1928,33 @@
       color: var(--text-primary);
     }
 
+    .handoff-inline-panel {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-sm);
+      animation: messageSlideIn 0.3s ease-out;
+    }
+
+    .handoff-inline-icon {
+      width: 2rem;
+      height: 2rem;
+      flex: 0 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-full);
+      background: rgba(16, 185, 129, 0.12);
+      color: var(--accent);
+      font-weight: 700;
+    }
+
     /* Thinking Indicator */
     .thinking-indicator {
       display: flex;
@@ -2061,5 +2088,10 @@
 
       .handoff-actions button {
         flex: 1;
+      }
+
+      .handoff-inline-panel {
+        align-items: stretch;
+        flex-direction: column;
       }
     }

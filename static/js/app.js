@@ -2460,9 +2460,16 @@ function showTransferBackPrompt(data) {
   closeHandoffPrompt();
 
   const destination = getDeviceLabel(data.to_device);
+  const targetEl = conversationEl || getActiveConversationEl();
+  if (!targetEl) return;
+
+  const emptyState = targetEl.querySelector('.empty-state');
+  if (emptyState) emptyState.remove();
+
   handoffPromptEl = document.createElement('div');
-  handoffPromptEl.className = 'handoff-banner handoff-banner-muted';
+  handoffPromptEl.className = 'handoff-inline-panel';
   handoffPromptEl.innerHTML = `
+    <div class="handoff-inline-icon">↗</div>
     <div class="handoff-copy">
       <strong>${escapeHtml(data.message || `Continued on ${destination}.`)}</strong>
       <span>You can transfer the live conversation back to this device.</span>
@@ -2477,7 +2484,8 @@ function showTransferBackPrompt(data) {
     bringConversationBack(data.conversation_id);
   };
   handoffPromptEl.querySelector('.handoff-secondary').onclick = closeHandoffPrompt;
-  document.body.appendChild(handoffPromptEl);
+  targetEl.appendChild(handoffPromptEl);
+  scrollToBottom();
 }
 
 function handleHandoffResumed(data) {
