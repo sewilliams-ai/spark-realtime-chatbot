@@ -132,6 +132,14 @@ ignored
         )
         assert session.is_codebase_build_request(sketch_request)
         assert not session.is_workspace_update_request(sketch_request)
+        session.conversation_history = [
+            {"role": "user", "content": "Hey Claude, please turn the sketch into an MVP."},
+            {"role": "assistant", "content": "On it."},
+        ]
+        split_followup = "Thanks, I'm going to dinner write me a brief to review for when I get back"
+        assert session.is_codebase_brief_followup_request(split_followup)
+        assert not session.is_workspace_update_request(split_followup)
+        assert not session.is_workspace_update_request("Dinner was fun; write me a brief when I get back")
         assert not session.is_workspace_update_request("Add these to the project")
 
         todos = session.extract_workspace_todos("Update my team", request, [])

@@ -105,3 +105,11 @@ the same request contains sketch/MVP/build/convert language. The intended Beat
 both route to `codebase_assistant` with the actual `IMG_3324.png` sketch. The
 codebase assistant now speaks only "On it." by default and leaves completion
 details in chat/workspace so later beats are not interrupted.
+
+Fixed the second manual E2E failure where Beat 1 was split across utterances.
+After a recent sketch/MVP request, "Thanks, I'm going to dinner, write me a
+brief to review when I get back" is now treated as a Beat 1 follow-up instead
+of an executive dinner update. The codebase agent launches in the background,
+so the call can continue after "On it."; if the model ever replies with text
+instead of a tool call to a sketch/MVP request, the server now starts the
+codebase agent anyway and suppresses the verbose repeated sketch summary.

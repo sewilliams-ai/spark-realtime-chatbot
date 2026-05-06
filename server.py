@@ -664,6 +664,18 @@ class VoiceSession:
             return
         conversation_states[self.conversation_id] = state
 
+    async def send_transient_ack(self, message: str) -> None:
+        """Show and speak a short transient acknowledgment."""
+        await self.send_message("transient_response", {"text": message})
+        await self.stream_tts(message, is_transient=True)
+
+    def start_codebase_agent_task(self, task: str, context: str = "", output_dir: str = "agent_monitor_mvp") -> None:
+        """Launch the Qwen codebase agent without blocking the active call."""
+        self._codebase_agent_started_at = time.time()
+        self._codebase_agent_task = task or "Build this sketch into a working MVP"
+        self._codebase_agent_context = context or ""
+        asyncio.create_task(self.execute_codebase_agent(self._codebase_agent_task, self._codebase_agent_context, output_dir))
+
     def hydrate_from_handoff_state(self, state: Dict[str, Any]) -> None:
         self.conversation_id = state.get("conversation_id") or self.conversation_id
         self.system_prompt = state.get("system_prompt") or self.system_prompt
@@ -1291,8 +1303,7 @@ class VoiceSession:
                                 feedback_msg = "Looking that up for you."
                             
                             # Send conversational feedback
-                            await self.send_message("tool_invocation", {"message": feedback_msg})
-                            await self.stream_tts(feedback_msg, is_transient=True)
+                            await self.send_transient_ack(feedback_msg)
                             
                             # IMPORTANT: Add assistant message with tool_calls to conversation history FIRST
                             # The LLM server expects this format: assistant message with tool_calls, then tool results
@@ -1572,7 +1583,7 @@ CRITICAL INSTRUCTIONS:
                                 return
 
                             elif is_agent_tool and agent_type == "codebase_assistant":
-                                await self.execute_codebase_agent(
+                                self.start_codebase_agent_task(
                                     agent_task or "Build this sketch into a working MVP",
                                     agent_context,
                                     agent_output_dir,
@@ -2563,10 +2574,49 @@ const mobilePath = {json.dumps(str(mobile_path))};
             return True
         return "mvp" in lower and any(term in lower for term in ("build", "implement", "convert", "turn this", "working app"))
 
+    def has_recent_codebase_context(self) -> bool:
+        """True when recent turns are about turning a sketch into a local MVP."""
+        recent_parts = []
+        for msg in self.conversation_history[-8:]:
+            if msg.get("role") not in {"user", "assistant"}:
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                recent_parts.append(content)
+        recent = " ".join(recent_parts).lower()
+        return (
+            bool(getattr(self, "_codebase_agent_started_at", None))
+            or self.is_codebase_build_request(recent)
+            or ("agent monitor" in recent and "mvp" in recent)
+        )
+
+    def is_codebase_brief_followup_request(self, text: str) -> bool:
+        """Detect split Beat 1 follow-ups like 'and write me a brief for when I get back'."""
+        lower = " ".join((text or "").lower().split())
+        executive_terms = (
+            "team",
+            "action item",
+            "action items",
+            "todo",
+            "to do",
+            "email",
+            "send",
+            "update",
+            "hardware partner",
+            "strategic alignment",
+            "pineapple",
+            "souvenir",
+            "husband",
+        )
+        if any(term in lower for term in executive_terms):
+            return False
+        brief_terms = ("brief", "review", "when i get back", "briefer")
+        return any(term in lower for term in brief_terms) and self.has_recent_codebase_context()
+
     def is_workspace_update_request(self, text: str) -> bool:
         """Detect Computex executive-update commands before the VLM tool roundtrip."""
         lower = " ".join((text or "").lower().split())
-        if self.is_codebase_build_request(lower):
+        if self.is_codebase_build_request(lower) or self.is_codebase_brief_followup_request(lower):
             return False
         direct_phrases = (
             "update my team",
@@ -2583,7 +2633,7 @@ const mobilePath = {json.dumps(str(mobile_path))};
             return True
         return (
             any(term in lower for term in ("dinner", "strategic alignment", "hardware partner", "investment"))
-            and any(term in lower for term in ("team", "action", "todo", "to do", "brief", "update"))
+            and any(term in lower for term in ("team", "action", "todo", "to do", "email", "send", "update"))
         )
 
     def upsert_markdown_section(self, path: Path, title: str, body: str, marker: str) -> None:
@@ -3577,10 +3627,16 @@ async def voice_call(websocket: WebSocket):
                             if image_b64:
                                 print(f"[Video Call] Image: {len(image_b64)} chars base64")
 
+                                if session.is_codebase_brief_followup_request(transcription):
+                                    ack = "Got it."
+                                    await session.send_transient_ack(ack)
+                                    session.conversation_history.append({"role": "assistant", "content": ack})
+                                    session.publish_handoff_state()
+                                    continue
+
                                 if session.is_workspace_update_request(transcription):
                                     ack = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
-                                    await session.send_message("tool_invocation", {"message": ack})
-                                    await session.stream_tts(ack, is_transient=True)
+                                    await session.send_transient_ack(ack)
                                     await session.execute_workspace_update_agent(
                                         "Draft the team update and personal follow-up",
                                         f"Phone handwritten-note request: {transcription}",
@@ -3690,7 +3746,7 @@ async def voice_call(websocket: WebSocket):
                                                     ack = "On it."
                                                 else:
                                                     ack = "On it."
-                                                await session.stream_tts(ack, is_transient=True)
+                                                await session.send_transient_ack(ack)
                                                 if tool_name == "markdown_assistant":
                                                     await session.execute_markdown_agent(
                                                         args.get("task", ""),
@@ -3700,7 +3756,7 @@ async def voice_call(websocket: WebSocket):
                                                 elif tool_name == "html_assistant":
                                                     await session.execute_html_agent(args.get("task", ""), args.get("context", ""))
                                                 elif tool_name == "codebase_assistant":
-                                                    await session.execute_codebase_agent(
+                                                    session.start_codebase_agent_task(
                                                         args.get("task", "Build this sketch into a working MVP"),
                                                         args.get("context", ""),
                                                         args.get("output_dir", "agent_monitor_mvp"),
@@ -3784,6 +3840,21 @@ async def voice_call(websocket: WebSocket):
                                                 else:
                                                     await session.stream_tts(synth_text)
                                     else:
+                                        if session.is_codebase_build_request(transcription):
+                                            ack = "On it."
+                                            await session.send_transient_ack(ack)
+                                            fallback_context = response_text or (
+                                                "Visible sketch from the current video frame. Build the Agent Monitor MVP with "
+                                                "dashboard, activity feed, task history, overview cards, agent list, and run history."
+                                            )
+                                            session.start_codebase_agent_task(
+                                                transcription,
+                                                fallback_context,
+                                                "agent_monitor_mvp",
+                                            )
+                                            session.conversation_history.append({"role": "assistant", "content": ack})
+                                            session.publish_handoff_state()
+                                            continue
                                         # Regular response - speak it
                                         if response_text:
                                             session.conversation_history.append({
