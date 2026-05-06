@@ -200,6 +200,7 @@ let currentChatId = null;  // Current active chat ID
 let chats = {};  // Store all chats: { chatId: { id, title, preview, timestamp, messages: [] } }
 let handoffPromptEl = null;
 let modalHandoffOffer = null;
+let pendingModalHandoffResume = null;
 
 // Chat management functions
 function generateChatId() {
@@ -528,6 +529,7 @@ async function startHandoffFromModal() {
   }
 
   pendingSystemPrompt = systemPromptInput.value.trim();
+  pendingModalHandoffResume = offer;
   connectVoiceWebSocket();
   log(`Continuing handoff conversation: ${offer.conversation_id}`);
 }
@@ -2291,6 +2293,7 @@ function connectVoiceWebSocket() {
 
   voiceWs.onerror = (e) => {
     clearTimeout(connectionTimeout);
+    pendingModalHandoffResume = null;
     log("WebSocket error occurred - connection failed");
     console.error("WebSocket error details:", e);
     console.error("Error type:", e.type);
@@ -2302,6 +2305,7 @@ function connectVoiceWebSocket() {
 
   voiceWs.onclose = (event) => {
     clearTimeout(connectionTimeout);
+    pendingModalHandoffResume = null;
     log(`Voice WebSocket closed - Code: ${event.code}, Reason: ${event.reason || 'none'}, WasClean: ${event.wasClean}`);
     console.log("Close event details:", event);
     setConnectionStatus("disconnected");
@@ -2422,6 +2426,17 @@ function showHandoffPrompt(data) {
   };
 
   document.body.appendChild(handoffPromptEl);
+}
+
+function resumeHandoffFromOffer(data) {
+  if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  voiceWs.send(JSON.stringify({
+    type: 'resume_handoff',
+    conversation_id: data.conversation_id
+  }));
+  return true;
 }
 
 async function bringConversationBack(conversationId) {
@@ -2989,10 +3004,18 @@ async function handleMessage(data) {
       break;
 
     case "handoff_available":
+      if (
+        pendingModalHandoffResume &&
+        pendingModalHandoffResume.conversation_id === data.conversation_id
+      ) {
+        resumeHandoffFromOffer(data);
+        break;
+      }
       showHandoffPrompt(data);
       break;
 
     case "handoff_resumed":
+      pendingModalHandoffResume = null;
       handleHandoffResumed(data);
       break;
 
@@ -3001,6 +3024,7 @@ async function handleMessage(data) {
       break;
 
     case "handoff_declined":
+      pendingModalHandoffResume = null;
       if (data.conversation_id && currentChatId && chats[currentChatId]) {
         chats[currentChatId].conversationId = data.conversation_id;
         saveChatsToStorage();
@@ -3009,6 +3033,7 @@ async function handleMessage(data) {
       break;
 
     case "handoff_unavailable":
+      pendingModalHandoffResume = null;
       closeHandoffPrompt();
       log(data.message || "Handoff unavailable");
       break;
