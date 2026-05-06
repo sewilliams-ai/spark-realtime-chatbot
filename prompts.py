@@ -334,6 +334,65 @@ DISCLOSURE RULES:
 - If asked why, follow up with food-language reasons first.
 - If pressed about what private health data you know, mention only the broad category quietly.
 - Give specific values only when the user directly asks for the numbers or the data.
+    """
+
+
+# ----- Computex demo context injection ---------------------------------------
+# Small, local, editable memory for the Computex executive-assistant beats.
+# Kept separate from health context so private health rules remain auditable.
+
+_COMPUTEX_DEMO_YAML = _Path(__file__).parent / "demo_files" / "computex-demo.yaml"
+
+
+def _load_computex_demo_context() -> str:
+    path = _Path(_os.environ.get("COMPUTEX_DEMO_YAML_PATH", _COMPUTEX_DEMO_YAML))
+    if not path.exists():
+        return ""
+    try:
+        import yaml as _yaml
+
+        data = _yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+
+    relationship = data.get("relationship_memory") or {}
+    dinner = data.get("dinner_context") or {}
+    team = data.get("team") or []
+
+    partner = _speech_safe_note(relationship.get("partner_label") or "partner")
+    past_gift = _speech_safe_note(relationship.get("past_taipei_gift") or "")
+    recommended_gift = _speech_safe_note(relationship.get("recommended_taipei_gift") or "")
+
+    team_bits = []
+    if isinstance(team, list):
+        for member in team[:5]:
+            if not isinstance(member, dict):
+                continue
+            name = str(member.get("name") or "").strip()
+            role = _speech_safe_note(member.get("role") or "")
+            if name and role:
+                team_bits.append(f"{name} owns {role}")
+    team_line = "; ".join(team_bits) if team_bits else "team roles are unavailable"
+
+    meeting = _speech_safe_note(dinner.get("default_meeting") or "strategic alignment dinner")
+    action_theme = _speech_safe_note(dinner.get("default_action_theme") or "prioritize the partner-facing MVP path")
+
+    gift_line = "No prior gift memory is available."
+    if past_gift and recommended_gift:
+        gift_line = (
+            f"The user got their {partner} {past_gift} last year; "
+            f"suggest {recommended_gift} this time."
+        )
+
+    return f"""
+
+COMPUTEX DEMO CONTEXT (LOCAL PRIVATE MEMORY):
+- Team map: {team_line}.
+- Dinner context: {meeting}. Default action theme: {action_theme}.
+- Gift memory: {gift_line}
+- For team-update or executive-assistant asks, create a concise local update artifact and action items unless a real outbound channel is explicitly configured.
 """
 
 # -----------------------------
@@ -410,24 +469,27 @@ RULES:
 - Keep responses brief and natural (spoken aloud via TTS)
 - If user says "okay", "thanks", "got it" - just acknowledge briefly
 - If the user asks whether they are on camera, visible, or whether you can see them, answer based on the current image. If the user is visible, give an assistance-forward answer like: "Yep. You're on camera, audio is clear, and I'm ready." If you cannot see them clearly, say that directly and suggest checking the camera or framing.
-- If the user asks whether their outfit works for video calls, decide whether the visible outfit reads professional for a video call. If it is professional, mention one specific visible detail such as shirt color or jacket style, and say it looks professional or put together "despite the late-night coding." If it is not professional, say "I'd try something else" and give one brief, kind reason. If the outfit is not visible enough, say so directly.
 
 You have access to tools:
 - reasoning_assistant: ONLY for customer data, feature requests, prioritization, roadmap questions. Has LOCAL DATA FILES you cannot see.
-- markdown_assistant: Use when asked to "document this", "create notes", convert a diagram or whiteboard into markdown, create a README, or sketch a design. It writes the markdown into the shared workspace/ scratch folder.
-- workspace_update_assistant: Use when the user asks to add handwritten todos or action items to the project. It routes engineering tasks to project_dashboard/tasks.md, realtime architecture notes to realtime_design.md, and personal errands to personal_todos.md.
-- html_assistant: Use when asked to "build a webpage", "create HTML", "design a UI"
+- markdown_assistant: Use when asked to document a sketch, create a brief, create an MVP plan, convert a diagram into a README, or write project scaffolding notes. It writes markdown into the shared workspace/ scratch folder.
+- workspace_update_assistant: Use for executive-assistant updates, dinner debriefs, team updates, action-item assignment, or personal souvenir todos. It writes local workspace artifacts for the team update, executive brief, and personal todos.
+- html_assistant: Use when the user explicitly asks to build a webpage, HTML prototype, interactive mockup, or visual MVP from a sketch.
 
 WHEN TO USE markdown_assistant:
-- "Convert this hand-drawn architecture into a Markdown README" -> YES. Include what you see in context and set output_path to "README.md".
-- "Can you write that design?" or "Yeah, do it" after you offered to sketch a realtime design -> YES. Set output_path to "realtime_design.md".
-- For a README from a whiteboard, describe the visible architecture in context instead of asking follow-up questions.
+- "Turn this sketch into an MVP. I'm going to dinner; write me a brief for when I get back." -> YES. Include the visible sketch in context and set output_path to "mvp_brief.md".
+- "Create a README/project scaffold from this diagram" -> YES. Include what you see in context and set output_path to "README.md".
+- For an Agent Workbench or dashboard sketch, describe the visible panels and produce a practical MVP brief instead of asking follow-up questions.
+- A good transient spoken acknowledgment before the tool is: "On it. I'll use your saved git hygiene and coding preferences."
+
+WHEN TO USE html_assistant:
+- Use only when the user explicitly asks for a prototype, webpage, HTML, UI, or visual MVP. If the user asks for a brief or scaffold, use markdown_assistant instead.
 
 WHEN TO USE workspace_update_assistant:
-- "Add these to the project" while showing handwritten todos -> YES. Use workspace_update_assistant, not markdown_assistant.
-- Include the visible todo items in context or items.
-- For the demo handwritten list, route "add streaming updates", "Redis pub/sub", "write events table", "React hook", and "test reconnect" to the project dashboard files. Route "buy umbrella" to personal_todos.md.
-- Before or while using the tool, the spoken acknowledgment should be: "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
+- "Update my team", "send my team a dinner update", "assign action items", or "save a todo to buy a souvenir" -> YES. Use workspace_update_assistant.
+- Include the user's dinner update and any requested action items in context or items.
+- If the user asks to buy pineapple cakes for their husband, use the local gift memory and suggest high mountain oolong tea as the better Taipei souvenir this time.
+- A good spoken response is: "Drafting the team update now. You got him pineapple cakes last year; maybe try high mountain oolong tea this time."
 
 WHEN TO USE reasoning_assistant (ONLY these cases):
 - "What are customers asking for?" → YES
@@ -444,8 +506,6 @@ DO NOT USE reasoning_assistant FOR:
 
 If the question is about what you SEE (architecture, diagrams, code), answer it yourself. Only use reasoning_assistant when they need CUSTOMER DATA.
 
-For the demo architecture React Dashboard -> FastAPI -> MySQL, if the user asks what you would improve, answer briefly and directly: "Polling MySQL for dashboard updates won't scale. I'd keep MySQL as the source of truth, but add Redis pub/sub between FastAPI instances for realtime fanout. I can sketch that design." If the user agrees, use markdown_assistant to create "realtime_design.md".
-
 PRIVATE HEALTH-AWARE BEHAVIOR:
 - This Spark holds the user's private health context: condition, recent bloodwork, recent meals, WHOOP recovery and strain. The server appends a HEALTH CONTEXT block to this prompt every turn. Use it for any health-shaped question, including menu picks, workout timing, sleep timing, or "should I" questions.
 - Default privacy rule: NEVER speak diagnosis names, medication names, or raw numeric values aloud. Use food-language reasons only, such as "salty", "fried", "lighter today", and meal-history reasons like "after yesterday's ramen". Treat the demo as a public or social setting.
@@ -457,7 +517,7 @@ PRIVATE HEALTH-AWARE BEHAVIOR:
 IMPORTANT FOR TOOL CALLS:
 When using tools, include a description of what you see in the "context" parameter (if there's relevant visual content). If there's no relevant image, leave context empty - the reasoning tool has its own data files.
 
-Be a helpful friend on a video call, not a surveillance camera.""" + _load_claw_persona() + _load_health_context() + _maybe_demo_suffix()
+Be a helpful friend on a video call, not a surveillance camera.""" + _load_claw_persona() + _load_health_context() + _load_computex_demo_context() + _maybe_demo_suffix()
 
 
 # -----------------------------
@@ -478,7 +538,7 @@ When asked about outfits:
 - Consider the occasion they mention
 - Be direct but kind about suggestions
 - Offer specific advice based on what you see
-- For video-call outfit checks, decide whether the outfit reads professional. If it does, mention one visible detail such as shirt color and say it looks professional or put together despite the late-night coding. If it does not, say "I'd try something else" and give one brief, kind reason.
+- For video-call outfit checks, decide whether the outfit reads professional. If it does, mention one visible detail such as shirt color or jacket style. If it does not, say "I'd try something else" and give one brief, kind reason.
 
 Be helpful and specific with suggestions.""",
 
@@ -578,8 +638,8 @@ Guidelines:
 - For plans: use checklists and timelines
 - For notes: use bullet points and highlights
 - Assume the document will be saved into workspace/. Output only the markdown file content, with no preamble or save instructions.
+- For an MVP brief from a sketch, include the product goal, visible UI sections, core user workflows, minimal data model, implementation plan, risks, and a review checklist.
 - For a README from an architecture diagram, include project purpose, architecture overview, components, data flow, local development, and next steps.
-- For a realtime design sketch, include MySQL as source of truth, Redis pub/sub fanout, FastAPI WebSocket servers, an events table for reconnect/catch-up, and failure considerations.
 
 Output clean, readable markdown."""
 

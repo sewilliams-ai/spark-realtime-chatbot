@@ -119,7 +119,7 @@ Keep these because they still support the new demo:
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Cleanup and fixture design: remove old generated workspace artifacts, decide whether `demo_files/computex-demo.yaml` is needed, and add it if needed with dummy org/gift context | completed |
-| 2 | Prompt refresh: replace old beat instructions in `VIDEO_CALL_PROMPT` and assistant prompts with the Computex beats while preserving health privacy and cold-open behavior | pending |
+| 2 | Prompt refresh: replace old beat instructions in `VIDEO_CALL_PROMPT` and assistant prompts with the Computex beats while preserving health privacy and cold-open behavior | completed |
 | 3 | Tool/server routing: expose `html_assistant` if needed, generalize workspace update behavior for MVP brief/team update/personal todo, and delete old handwritten-umbrella routing | pending |
 | 4 | Prompt and workflow tests: rewrite `bench/test_demo_prompts.py`; add unit checks for workspace routing and absence of old hard-coded strings | pending |
 | 5 | Docs and milestone closeout: update README, TESTING, MILESTONES, and progress; commit each phase with existing `[feat]`, `[fix]`, `[docs]` format | pending |
