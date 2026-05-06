@@ -25,3 +25,12 @@ Wrote the new active `task_plan.md` and `findings.md` for the Computex demo
 beats refresh. No runtime code changes or artifact deletion have been executed
 yet; cleanup is Phase 1 of the implementation plan so it can be reviewed and
 committed deliberately.
+
+## Session 2026-05-06 - Phase 1 cleanup and fixture
+
+Started implementation. Cleared the previous generated workspace demo artifacts
+so the next demo run starts from `workspace/.gitkeep`, and added
+`demo_files/computex-demo.yaml` as a flat dummy context fixture for team roles,
+the dinner setup, and the Taipei gift-memory beat. This mirrors the existing
+flat dummy health fixture pattern and avoids a new package or top-level demo
+directory.

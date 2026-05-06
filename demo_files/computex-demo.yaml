@@ -1,0 +1,20 @@
+# DUMMY DATA FOR DEMO/TESTING ONLY.
+# This committed file provides stable local context for the Computex demo beats.
+# It is intentionally small and flat so the prompt loader can remain auditable.
+
+relationship_memory:
+  partner_label: husband
+  past_taipei_gift: pineapple cakes
+  recommended_taipei_gift: high mountain oolong tea
+
+team:
+  - name: Avery
+    role: hardware partnerships
+  - name: Morgan
+    role: product strategy
+  - name: Riley
+    role: engineering lead
+
+dinner_context:
+  default_meeting: strategic alignment dinner with hardware partners
+  default_action_theme: prioritize the partner-facing MVP path
