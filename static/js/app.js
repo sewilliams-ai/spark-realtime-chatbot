@@ -1092,6 +1092,26 @@ function updateVideoCallStatus(state, text) {
   }
 }
 
+function resumeVideoCallListening(reason) {
+  videoCallProcessing = false;
+  videoCallSpeaking = false;
+
+  if (videoCallActive && !videoCallMuted) {
+    updateVideoCallStatus('listening', pttMode ? 'Press SPACE or hold button to talk' : 'Listening...');
+  }
+
+  if (videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying) {
+    setTimeout(() => {
+      if (!videoCallProcessing && videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying) {
+        try {
+          videoCallVadInstance.start();
+          log(`VAD resumed after ${reason}`);
+        } catch (e) {}
+      }
+    }, 100);
+  }
+}
+
 async function sendVideoCallData(audioFloat32) {
   // Debounce to prevent duplicate sends
   const now = Date.now();
@@ -1310,6 +1330,8 @@ function endVideoCall() {
 
 function teardownVideoCallMode() {
   videoCallActive = false;
+  videoCallSpeaking = false;
+  videoCallProcessing = false;
 
   // Stop any playing TTS
   stopTtsPlayback();
@@ -3319,6 +3341,8 @@ async function handleMessage(data) {
 
         // Show thinking indicator after user's speech is displayed
         showThinkingIndicator();
+      } else if (videoCallActive) {
+        resumeVideoCallListening('empty ASR result');
       }
       // Clear currentUserMsg so next speech creates new message
       currentUserMsg = null;
