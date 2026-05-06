@@ -1,3 +1,14 @@
+**Feature: Computex executive-assistant routing**
+**Test #0: Audio-only team update and personal todo routing**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python bench/test_computex_workspace.py && .venv-gpu/bin/python bench/test_demo_prompts.py`
+**Result**:
+```bash
+computex workspace routing: PASS
+computex demo prompt e2e: PASS
+```
+**Coverage:** Verifies audio-only turns such as "share the updates with my team", "send an update to my team", "and Q3 of 2026", and the pineapple-cakes personal-todo follow-up route deterministically to the workspace update path instead of asking for recipients. The generated workspace files include the local dummy org chart, demo email target, Q3 detail, team update, executive brief, and personal todo.
+
 **Feature: Computex demo script routing**
 **Test #0: Exact Beat 1 script, split utterance, and ASR-variant routing**
 **Status:** PASS

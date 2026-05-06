@@ -123,3 +123,15 @@ handoff conversation history. Verification passed with Python `py_compile`,
 `node --check static/js/app.js`, `git diff --check`,
 `.venv-gpu/bin/python bench/test_computex_workspace.py`, and the full
 `.venv-gpu/bin/python bench/test_demo_prompts.py` prompt E2E suite.
+
+Fixed the Beat 3 manual E2E failure where audio-only phone turns fell through
+to the general LLM and asked who the user's team was. Team-update, share-update,
+Q3-follow-up, and pineapple-cakes personal-todo turns now route through a
+deterministic workspace-update handler with dummy local org-chart and email
+context, writing `workspace/team_update.md`, `workspace/executive_brief.md`,
+and `workspace/personal_todos.md`. User turns are published to handoff state as
+soon as ASR finalizes so active-call transfers do not lose the latest spoken
+turn if the model is still responding. Verification passed with Python
+`py_compile`, `node --check static/js/app.js`, `git diff --check`,
+`.venv-gpu/bin/python bench/test_computex_workspace.py`, and
+`.venv-gpu/bin/python bench/test_demo_prompts.py`.

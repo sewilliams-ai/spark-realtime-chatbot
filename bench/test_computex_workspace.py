@@ -126,6 +126,9 @@ ignored
             "Assign action items and save a todo to buy pineapple cakes for my husband."
         )
         assert session.is_workspace_update_request(request)
+        assert session.is_workspace_update_request("and ask it to share the updates with my team.")
+        assert session.is_workspace_update_request("Please share this update with my team.")
+        assert session.is_workspace_update_request("please send an update to my team saying that.")
         sketch_request = (
             "Please convert this sketch to an MVP. "
             "I'm going to dinner, write me a briefer review when I get back."
@@ -152,6 +155,18 @@ ignored
         combined_request = session.codebase_intent_text("diagram into a front-end MVP.")
         assert session.is_codebase_build_request(combined_request)
         assert not getattr(session, "_pending_codebase_fragment", "")
+        session.conversation_history = [
+            {"role": "user", "content": "Please send an update to my team saying the strategic partnership is on track."},
+            {"role": "assistant", "content": "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"},
+        ]
+        session._workspace_update_started_at = 1.0
+        assert session.is_workspace_update_request("and Q3 of 2026.")
+        assert session.is_workspace_update_request(
+            "Oh, and also add a to-do, update my personal to-dos to buy my partner pineapple cakes as a souvenir before heading back."
+        )
+        context = session.build_workspace_update_context("and Q3 of 2026.")
+        assert "team@spark-demo.local" in context
+        assert "Avery owns hardware partnerships" in context
 
         todos = session.extract_workspace_todos("Update my team", request, [])
         assert any("Avery" in item for item in todos), todos
@@ -173,6 +188,8 @@ ignored
         joined = team + brief + personal
 
         assert "Hardware partners" in team
+        assert "team@spark-demo.local" in team
+        assert "Avery owns hardware partnerships" in team
         assert "Agent Workbench" in brief
         assert "high mountain oolong tea" in personal
         assert "spark-computex-team-update" in team
@@ -180,6 +197,30 @@ ignored
         assert "spark-computex-personal-todos" in personal
         for stale in ("spark-beat4", "Buy umbrella", "Redis pub/sub"):
             assert stale not in joined, stale
+
+        sent = []
+
+        async def fake_send(msg_type, data=None):
+            sent.append((msg_type, data or {}))
+            return True
+
+        async def fake_tts(text, is_transient=False, voice=None):
+            sent.append(("tts", {"text": text, "is_transient": is_transient}))
+
+        session.send_message = fake_send
+        session.stream_tts = fake_tts
+        session.publish_handoff_state = lambda *args, **kwargs: None
+        session.conversation_history = [{"role": "system", "content": "demo"}]
+        asyncio.run(session.handle_workspace_update_request(
+            "Please send an update to my team saying the strategic partnership is on track for Q3 of 2026."
+        ))
+        routed_types = [msg_type for msg_type, _ in sent]
+        assert routed_types.count("final_response") == 1, routed_types
+        assert "workspace_update_complete" in routed_types, routed_types
+        assert any("Drafting the email now" in data.get("text", "") for msg_type, data in sent if msg_type == "final_response")
+        routed_team = (root / "workspace" / "team_update.md").read_text()
+        assert "Q3 of 2026" in routed_team
+        assert "team@spark-demo.local" in routed_team
 
     print("computex workspace routing: PASS")
     return 0

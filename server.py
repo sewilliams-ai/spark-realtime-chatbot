@@ -12,6 +12,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -1211,6 +1212,11 @@ class VoiceSession:
         
         # Add user message to history
         self.conversation_history.append({"role": "user", "content": user_text})
+        self.publish_handoff_state(include_empty=True)
+
+        if self.is_workspace_update_request(user_text):
+            await self.handle_workspace_update_request(user_text)
+            return
 
         # Build messages for LLM
         messages_for_llm = list(self.conversation_history)
@@ -2664,16 +2670,44 @@ const mobilePath = {json.dumps(str(mobile_path))};
             return False
         direct_phrases = (
             "update my team",
+            "share the updates with my team",
+            "share updates with my team",
+            "share this update with my team",
+            "share the update with my team",
+            "send an update to my team",
             "send this update out to my team",
             "send this update to my team",
+            "send the update to my team",
+            "send update to my team",
             "send my team",
             "assign action items",
             "save a todo",
             "save a to do",
+            "personal to-dos",
+            "personal todos",
             "buy pineapple cakes",
             "buy a souvenir",
         )
         if any(phrase in lower for phrase in direct_phrases):
+            return True
+        if self.has_recent_workspace_update_context() and any(term in lower for term in (
+            "q3",
+            "2026",
+            "strategic partnership",
+            "strategic alignment",
+            "hardware partner",
+            "invest",
+            "investment",
+            "pineapple",
+            "souvenir",
+            "husband",
+            "partner",
+            "personal todo",
+            "personal to-do",
+            "team",
+            "share",
+            "send",
+        )):
             return True
         return (
             any(term in lower for term in ("dinner", "strategic alignment", "hardware partner", "investment"))
@@ -2719,6 +2753,12 @@ const mobilePath = {json.dumps(str(mobile_path))};
             "",
             "Draft:",
             "The strategic alignment dinner went well. Hardware partners are open to investing if we prioritize the partner-facing MVP path and keep the Agent Workbench story concrete.",
+            "",
+            "Local team context:",
+            "- Avery owns hardware partnerships.",
+            "- Morgan owns product strategy.",
+            "- Riley owns engineering lead.",
+            "- Demo email target: team@spark-demo.local.",
             "",
             "Action items:",
             action_lines,
@@ -2770,9 +2810,71 @@ const mobilePath = {json.dumps(str(mobile_path))};
             "personal_tasks": personal_tasks,
         }
 
-    async def execute_workspace_update_agent(self, task: str, context: str = "", items: list = None):
+    def has_recent_workspace_update_context(self) -> bool:
+        """True when recent turns are part of the Computex executive-assistant beat."""
+        if getattr(self, "_workspace_update_started_at", None):
+            return True
+        recent_parts = []
+        for msg in self.conversation_history[-10:]:
+            if msg.get("role") not in {"user", "assistant"}:
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                recent_parts.append(content)
+        recent = " ".join(recent_parts).lower()
+        return any(term in recent for term in (
+            "update my team",
+            "share the update",
+            "share this update",
+            "send an update",
+            "team update",
+            "action item",
+            "hardware partner",
+            "strategic partnership",
+            "strategic alignment",
+            "pineapple cakes",
+            "personal to-do",
+            "personal todo",
+        ))
+
+    def build_workspace_update_context(self, current_text: str) -> str:
+        """Collect recent user turns so short follow-ups still have demo context."""
+        user_turns = []
+        for msg in self.conversation_history[-12:]:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                user_turns.append(content.strip())
+        if current_text.strip() and (not user_turns or user_turns[-1] != current_text.strip()):
+            user_turns.append(current_text.strip())
+        recent = "\n".join(f"- {turn}" for turn in user_turns[-6:])
+        return (
+            f"Recent user turns:\n{recent}\n\n"
+            "Computex executive-assistant demo. Assume the local dummy org chart is available: "
+            "Avery owns hardware partnerships, Morgan owns product strategy, Riley owns engineering lead, "
+            "and the local demo email target is team@spark-demo.local. "
+            "Treat the user's spoken fragments as one evolving dinner update; do not ask who the team is."
+        )
+
+    async def handle_workspace_update_request(self, user_text: str, items: list = None):
+        """Deterministically execute the Computex team-update/personal-todo beat."""
+        self._workspace_update_started_at = time.time()
+        ack = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
+        await self.send_transient_ack(ack)
+        self.conversation_history.append({"role": "assistant", "content": ack})
+        self.publish_handoff_state()
+        await self.execute_workspace_update_agent(
+            "Draft the team update and personal follow-up",
+            self.build_workspace_update_context(user_text),
+            items or [],
+            speak_summary=False,
+        )
+
+    async def execute_workspace_update_agent(self, task: str, context: str = "", items: list = None, speak_summary: bool = True):
         """Route Computex executive updates into the shared workspace files."""
         try:
+            self._workspace_update_started_at = time.time()
             todos = self.extract_workspace_todos(task, context, items)
             result = self.apply_workspace_todo_updates(todos, task, context)
             files = result["files"]
@@ -2795,7 +2897,8 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 "action_items": result["action_items"],
                 "personal_tasks": result["personal_tasks"],
             })
-            await self.stream_tts(summary)
+            if speak_summary:
+                await self.stream_tts(summary)
         except Exception as e:
             print(f"[Voice Session] Workspace update agent error: {e}")
             import traceback
@@ -3657,6 +3760,7 @@ async def voice_call(websocket: WebSocket):
                                 "role": "user",
                                 "content": transcription
                             })
+                            session.publish_handoff_state(include_empty=True)
                             
                             # Build VLM request with image if available
                             if image_b64:
@@ -3677,13 +3781,7 @@ async def voice_call(websocket: WebSocket):
                                     continue
 
                                 if session.is_workspace_update_request(intent_text):
-                                    ack = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
-                                    await session.send_transient_ack(ack)
-                                    await session.execute_workspace_update_agent(
-                                        "Draft the team update and personal follow-up",
-                                        f"Phone handwritten-note request: {intent_text}",
-                                        [],
-                                    )
+                                    await session.handle_workspace_update_request(intent_text)
                                     continue
 
                                 # Face recognition - recognize people in frame
