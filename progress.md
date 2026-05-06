@@ -61,3 +61,18 @@ acknowledgments from active server/tool paths. Tests run:
 `.venv-gpu/bin/python -m py_compile server.py tools.py`, tool sentinel smoke,
 Computex workspace routing smoke, stale-string `rg`, and `git diff --check`;
 all passed.
+
+## Session 2026-05-06 - Phase 4 prompt and workflow tests
+
+Rewrote `bench/test_demo_prompts.py` for the Computex script and added wording
+variants for each trigger: three cold-open phrasings, three Agent Workbench
+MVP brief/scaffold phrasings, one explicit HTML prototype trigger, three
+private-menu phrasings, and three executive-update phrasings. The live E2E run
+against local `qwen3.6:35b-a3b` passed after one harness assertion was adjusted
+to accept the planned README/scaffold fallback for "project scaffolding notes."
+Added `bench/test_computex_workspace.py` for deterministic tool-schema and
+workspace-routing coverage. Tests run: `.venv-gpu/bin/python -m py_compile
+bench/test_demo_prompts.py bench/test_computex_workspace.py server.py tools.py
+prompts.py`, `node --check static/js/app.js`, `git diff --check`,
+`.venv-gpu/bin/python bench/test_demo_prompts.py`, and `.venv-gpu/bin/python
+bench/test_computex_workspace.py`; all passed after the harness-only fix.

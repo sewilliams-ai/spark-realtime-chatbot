@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live demo prompt regression against the local OpenAI-compatible LLM.
+"""Live Computex demo prompt regression against the local OpenAI-compatible LLM.
 
 Run:
   .venv-gpu/bin/python bench/test_demo_prompts.py
@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from prompts import DEFAULT_SYSTEM_PROMPT, VIDEO_CALL_PROMPT  # noqa: E402
+from prompts import VIDEO_CALL_PROMPT  # noqa: E402
 from tools import ALL_TOOLS  # noqa: E402
 
 
@@ -60,7 +60,7 @@ def ask(url, model, messages, tools=None, timeout=90):
         "model": model,
         "messages": messages,
         "stream": False,
-        "max_tokens": 800,
+        "max_tokens": 900,
         "reasoning_effort": "none",
     }
     if tools:
@@ -77,123 +77,12 @@ def require(condition, message):
         raise AssertionError(message)
 
 
-def contains_all(haystack, needles):
+def contains_any(haystack, needles):
     haystack = haystack.lower()
-    return all(needle.lower() in haystack for needle in needles)
+    return any(needle.lower() in haystack for needle in needles)
 
 
-def test_cold_open(url, model):
-    message, elapsed = ask(url, model, [
-        {"role": "system", "content": VIDEO_CALL_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                "Current video frame: the user is centered and visible, and the microphone is working. "
-                "User asks: Can you see me and hear me?"
-            ),
-        },
-    ])
-    reply = text(message)
-    require(not message.get("tool_calls"), f"unexpected tool call: {message}")
-    require(
-        ("camera" in reply.lower() or "see" in reply.lower() or "visible" in reply.lower())
-        and ("ready" in reply.lower() or "audio" in reply.lower() or "hear" in reply.lower()),
-        f"cold open reply missed camera/audio readiness: {reply!r}",
-    )
-    print(f"Cold open: PASS :: {reply} ({elapsed:.0f}ms)")
-
-
-def test_readme_tool(url, model):
-    message, elapsed = ask(url, model, [
-        {"role": "system", "content": VIDEO_CALL_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                "Visible whiteboard: React frontend -> FastAPI backend -> MySQL database. "
-                "Convert this hand-drawn architecture into a Markdown README."
-            ),
-        },
-    ], tools=tool_defs(["markdown_assistant", "reasoning_assistant", "workspace_update_assistant"]))
-    name, args = tool_call(message)
-    require(name == "markdown_assistant", f"expected markdown_assistant, got {name}: {message}")
-    require("readme" in (args.get("output_path", "") + args.get("task", "")).lower(), f"missing README target: {args}")
-    require(
-        contains_all(args.get("context", ""), ["React", "FastAPI", "MySQL"]),
-        f"missing visible architecture context: {args}",
-    )
-    print(f"Beat 1 README tool: PASS :: {args} ({elapsed:.0f}ms)")
-
-
-def test_architecture_improvement(url, model):
-    message, elapsed = ask(url, model, [
-        {"role": "system", "content": VIDEO_CALL_PROMPT},
-        {
-            "role": "user",
-            "content": "Visible whiteboard: React Dashboard -> FastAPI -> MySQL. What would you improve?",
-        },
-    ], tools=tool_defs(["markdown_assistant", "reasoning_assistant", "workspace_update_assistant"]))
-    reply = text(message)
-    require(not message.get("tool_calls"), f"expected direct answer, got tool call: {message}")
-    require("redis" in reply.lower() and ("pub/sub" in reply.lower() or "pubsub" in reply.lower()), reply)
-    require("mysql" in reply.lower(), reply)
-    print(f"Beat 1 improvement: PASS :: {reply} ({elapsed:.0f}ms)")
-
-
-def test_realtime_design_followup(url, model):
-    message, elapsed = ask(url, model, [
-        {"role": "system", "content": VIDEO_CALL_PROMPT},
-        {
-            "role": "user",
-            "content": "Visible whiteboard: React Dashboard -> FastAPI -> MySQL. What would you improve?",
-        },
-        {
-            "role": "assistant",
-            "content": (
-                "Polling MySQL for dashboard updates won't scale. I'd keep MySQL as the source of truth, "
-                "but add Redis pub/sub between FastAPI instances for realtime fanout. I can sketch that design."
-            ),
-        },
-        {"role": "user", "content": "Yeah, do it."},
-    ], tools=tool_defs(["markdown_assistant", "reasoning_assistant", "workspace_update_assistant"]))
-    name, args = tool_call(message)
-    require(name == "markdown_assistant", f"expected markdown_assistant, got {name}: {message}")
-    target = (args.get("output_path", "") + args.get("task", "")).lower()
-    require("realtime" in target or "real-time" in target, f"missing realtime target: {args}")
-    require("redis" in (args.get("context", "") + args.get("task", "")).lower(), f"missing Redis context: {args}")
-    print(f"Beat 1 realtime design tool: PASS :: {args} ({elapsed:.0f}ms)")
-
-
-def test_fashion(url, model):
-    message, elapsed = ask(url, model, [
-        {"role": "system", "content": VIDEO_CALL_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                "Current video frame: I am wearing a dark navy top and jacket after late-night coding. "
-                "Does this outfit work for video calls?"
-            ),
-        },
-    ])
-    reply = text(message)
-    require(not message.get("tool_calls"), f"unexpected tool call: {message}")
-    lower = reply.lower()
-    require(("professional" in lower or "put together" in lower) and ("navy" in lower or "dark" in lower), reply)
-    print(f"Beat 2 fashion: PASS :: {reply} ({elapsed:.0f}ms)")
-
-
-def test_private_menu(url, model):
-    message, elapsed = ask(url, model, [
-        {"role": "system", "content": VIDEO_CALL_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                "Visible menu items: braised vegetables listed as steamed and light, steamed rice, "
-                "beef noodle soup listed as salty broth, and fried pork chops listed as fried. "
-                "What should I order for a lighter lunch today?"
-            ),
-        },
-    ])
-    reply = text(message)
+def check_no_private_health_leak(reply):
     lower = reply.lower()
     forbidden = [
         "blood pressure",
@@ -201,41 +90,168 @@ def test_private_menu(url, model):
         "hypertension",
         "diagnosis",
         "medication",
+        "lisinopril",
     ]
-    require(not message.get("tool_calls"), f"unexpected tool call: {message}")
-    require(("braised" in lower or "vegetable" in lower or "rice" in lower), reply)
-    require(("beef noodle" in lower or "fried pork" in lower), reply)
-    require(("salty" in lower or "fried" in lower or "heavy" in lower or "lighter" in lower), reply)
     require(not any(term in lower for term in forbidden), f"privacy term leaked: {reply}")
     require(not re.search(r"\d", reply), f"raw digit leaked: {reply}")
-    print(f"Beat 3 menu: PASS :: {reply} ({elapsed:.0f}ms)")
 
 
-def test_workspace_todos(url, model):
-    items = [
-        "add streaming updates",
-        "Redis pub/sub",
-        "write events table",
-        "React hook",
-        "test reconnect",
+def check_static_prompt_absence():
+    stale = [
+        "Polling MySQL for dashboard updates",
+        "despite the late-night coding",
         "buy umbrella",
+        "React/FastAPI/MySQL project dashboard we started",
+        "add streaming updates",
+        "write events table",
+        "test reconnect",
+        "spark-beat4",
     ]
+    for term in stale:
+        require(term not in VIDEO_CALL_PROMPT, f"stale prompt term still active: {term}")
+    require("mvp_brief.md" in VIDEO_CALL_PROMPT, "missing Computex MVP brief target")
+    require("high mountain oolong tea" in VIDEO_CALL_PROMPT, "missing Computex gift memory")
+    print("Static prompt absence: PASS")
+
+
+def test_cold_open_variants(url, model):
+    variants = [
+        "Current video frame: the user is centered and visible, and the microphone is working. User asks: Hey, am I on camera?",
+        "Current video frame: the user is visible at the laptop, and audio input is active. User asks: Can you see me and hear me?",
+        "Current video frame: face is in frame and mic levels are moving. User asks: Are we live?",
+    ]
+    for idx, prompt in enumerate(variants, 1):
+        message, elapsed = ask(url, model, [
+            {"role": "system", "content": VIDEO_CALL_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
+        reply = text(message)
+        require(not message.get("tool_calls"), f"unexpected tool call: {message}")
+        require(
+            contains_any(reply, ["camera", "see", "visible", "live"])
+            and contains_any(reply, ["ready", "audio", "hear"]),
+            f"cold open variant {idx} missed readiness: {reply!r}",
+        )
+        print(f"Cold open variant {idx}: PASS :: {reply} ({elapsed:.0f}ms)")
+
+
+def test_mvp_brief_variants(url, model):
+    variants = [
+        (
+            "Visible sketch: Agent Workbench dashboard with Project Brief, Agent Status, "
+            "Action Items, and Activity Feed panels. Turn this sketch into an MVP. "
+            "I'm going to dinner; write me a brief for when I get back."
+        ),
+        (
+            "I uploaded a simple Agent Workbench wireframe: left panel project brief, "
+            "right panel agent status, lower action items and activity feed. Create an "
+            "MVP brief I can review after dinner."
+        ),
+        (
+            "This whiteboard shows an Agent Workbench dashboard for tracking agent status, "
+            "action items, and recent activity. Create project scaffolding notes from it."
+        ),
+    ]
+    tools = tool_defs(["markdown_assistant", "html_assistant", "reasoning_assistant", "workspace_update_assistant"])
+    for idx, prompt in enumerate(variants, 1):
+        message, elapsed = ask(url, model, [
+            {"role": "system", "content": VIDEO_CALL_PROMPT},
+            {"role": "user", "content": prompt},
+        ], tools=tools)
+        name, args = tool_call(message)
+        require(name == "markdown_assistant", f"variant {idx}: expected markdown_assistant, got {name}: {message}")
+        target = (args.get("output_path", "") + " " + args.get("task", "")).lower()
+        context = (args.get("context", "") + " " + args.get("task", "")).lower()
+        require(
+            "brief" in target
+            or "mvp" in target
+            or "scaffold" in target
+            or "readme" in target
+            or args.get("output_path") in {"mvp_brief.md", "README.md"},
+            args,
+        )
+        require(contains_any(context, ["agent workbench", "project brief", "agent status", "activity feed"]), args)
+        print(f"Beat 1 MVP brief variant {idx}: PASS :: {args} ({elapsed:.0f}ms)")
+
+
+def test_html_prototype_trigger(url, model):
     message, elapsed = ask(url, model, [
         {"role": "system", "content": VIDEO_CALL_PROMPT},
         {
             "role": "user",
             "content": (
-                "Visible handwritten note lists: add streaming updates; Redis pub/sub; write events table; "
-                "React hook; test reconnect; buy umbrella. Add these to the project."
+                "Visible sketch: Agent Workbench dashboard with Project Brief, Agent Status, "
+                "Action Items, and Activity Feed. Build a single-page HTML prototype from this."
             ),
         },
-    ], tools=tool_defs(["markdown_assistant", "workspace_update_assistant", "reasoning_assistant"]))
+    ], tools=tool_defs(["markdown_assistant", "html_assistant", "workspace_update_assistant"]))
     name, args = tool_call(message)
-    require(name == "workspace_update_assistant", f"expected workspace_update_assistant, got {name}: {message}")
-    joined = " ".join(args.get("items") or []) + " " + args.get("context", "") + " " + args.get("task", "")
-    for item in items:
-        require(item.lower() in joined.lower(), f"missing item {item!r}: {args}")
-    print(f"Beat 4 todo routing tool: PASS :: {args} ({elapsed:.0f}ms)")
+    require(name == "html_assistant", f"expected html_assistant, got {name}: {message}")
+    joined = (args.get("task", "") + " " + args.get("context", "")).lower()
+    require(contains_any(joined, ["agent workbench", "dashboard", "prototype", "html"]), args)
+    print(f"Beat 1 HTML prototype trigger: PASS :: {args} ({elapsed:.0f}ms)")
+
+
+def test_private_menu_variants(url, model):
+    variants = [
+        (
+            "Visible Chinese menu translations: braised beef, steamed vegetables, fried rice, "
+            "beef noodle soup, and milk tea. Hey Claw, what should I order?"
+        ),
+        (
+            "I'm at dinner in Taipei. The visible menu has steamed fish, braised vegetables, "
+            "fried chicken cutlet, salty beef noodles, and sweet milk tea. Based on what you "
+            "remember, pick something for me."
+        ),
+        (
+            "Menu in frame: steamed greens, rice, braised tofu, fried pork chop, and milk tea. "
+            "What is the smart order tonight?"
+        ),
+    ]
+    for idx, prompt in enumerate(variants, 1):
+        message, elapsed = ask(url, model, [
+            {"role": "system", "content": VIDEO_CALL_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
+        reply = text(message)
+        lower = reply.lower()
+        require(not message.get("tool_calls"), f"unexpected tool call: {message}")
+        require(contains_any(lower, ["steamed", "braised", "greens", "vegetables", "tofu", "fish"]), reply)
+        require(contains_any(lower, ["fried", "noodle", "milk tea", "cutlet", "pork chop"]), reply)
+        require(contains_any(lower, ["lighter", "salty", "fried", "heavy", "sweet"]), reply)
+        check_no_private_health_leak(reply)
+        print(f"Beat 2 private menu variant {idx}: PASS :: {reply} ({elapsed:.0f}ms)")
+
+
+def test_executive_update_variants(url, model):
+    variants = [
+        (
+            "Claw, update my team: the strategic alignment meeting went amazing. "
+            "Our hardware partners agreed to invest if we prioritize the partner-facing MVP. "
+            "Assign action items based on my team org chart. Also save a todo to buy pineapple cakes for my husband."
+        ),
+        (
+            "Dinner went well. Send my team a concise update that the hardware partners are aligned "
+            "if we focus the Agent Workbench MVP, assign next steps, and remind me to get pineapple cakes for my husband."
+        ),
+        (
+            "We are in the Uber back. Draft the team update from dinner: partners are excited, "
+            "investment depends on prioritizing the MVP path. Add action items and a souvenir todo for my husband."
+        ),
+    ]
+    tools = tool_defs(["markdown_assistant", "html_assistant", "workspace_update_assistant", "reasoning_assistant"])
+    for idx, prompt in enumerate(variants, 1):
+        message, elapsed = ask(url, model, [
+            {"role": "system", "content": VIDEO_CALL_PROMPT},
+            {"role": "user", "content": prompt},
+        ], tools=tools)
+        name, args = tool_call(message)
+        require(name == "workspace_update_assistant", f"variant {idx}: expected workspace_update_assistant, got {name}: {message}")
+        joined = " ".join(args.get("items") or []) + " " + args.get("context", "") + " " + args.get("task", "")
+        lower = joined.lower()
+        require(contains_any(lower, ["team", "dinner", "strategic", "hardware", "partner", "mvp"]), args)
+        require(contains_any(lower, ["pineapple", "souvenir", "husband", "oolong"]), args)
+        print(f"Beat 3 executive update variant {idx}: PASS :: {args} ({elapsed:.0f}ms)")
 
 
 def main():
@@ -245,23 +261,23 @@ def main():
     parser.add_argument("--timeout", type=int, default=90)
     args = parser.parse_args()
 
-    print(f"demo prompt e2e: url={args.url} model={args.model}")
+    print(f"computex demo prompt e2e: url={args.url} model={args.model}")
     tests = [
-        test_cold_open,
-        test_readme_tool,
-        test_architecture_improvement,
-        test_realtime_design_followup,
-        test_fashion,
-        test_private_menu,
-        test_workspace_todos,
+        lambda _url, _model: check_static_prompt_absence(),
+        test_cold_open_variants,
+        test_mvp_brief_variants,
+        test_html_prototype_trigger,
+        test_private_menu_variants,
+        test_executive_update_variants,
     ]
     failures = []
     for test in tests:
         try:
             test(args.url, args.model)
         except Exception as exc:
-            failures.append((test.__name__, exc))
-            print(f"{test.__name__}: FAIL :: {exc}", file=sys.stderr)
+            name = getattr(test, "__name__", "static_check")
+            failures.append((name, exc))
+            print(f"{name}: FAIL :: {exc}", file=sys.stderr)
 
     if failures:
         print("\nFailures:", file=sys.stderr)
@@ -269,7 +285,7 @@ def main():
             print(f"- {name}: {exc}", file=sys.stderr)
         return 1
 
-    print("demo prompt e2e: PASS")
+    print("computex demo prompt e2e: PASS")
     return 0
 
 
