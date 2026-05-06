@@ -20,6 +20,7 @@ let ttsAborted = false; // Block new audio after barge-in
 let nextPlayTime = null;
 let currentTransientMsg = null;
 let currentUserMsg = null;  // Track current user message being built
+let lastCodebaseResult = null;
 
 const logEl = document.getElementById("log");
 const connectionStatusEl = document.getElementById("connectionStatus");
@@ -3252,36 +3253,16 @@ async function handleMessage(data) {
       break;
 
     case "codebase_complete":
-      // Codebase assistant finished - add concise generated-file summary
+      // Codebase assistant finished in the background. Keep the live demo
+      // transcript quiet; files, screenshots, and preview URL are saved.
       hideThinkingIndicator();
-      removeEmptyState();
+      lastCodebaseResult = data;
       const codebaseFiles = data.files || {};
-      const codebaseSummary = data.summary || "Codebase generated.";
       const codebaseList = Object.values(codebaseFiles).filter(Boolean).join("\n");
-      const codebaseMsg = createMessageElement(
-        "assistant",
-        codebaseList ? `${codebaseSummary}\n\n${codebaseList}` : codebaseSummary
-      );
       const previewPath = data.preview_path || (data.preview && data.preview.preview_path) || "";
       const previewUrl = data.preview_url || (data.preview && data.preview.preview_url) || "";
       const previewHref = previewPath ? new URL(previewPath, window.location.origin).toString() : previewUrl;
-      if (previewHref) {
-        const breakEl = document.createElement("br");
-        const linkEl = document.createElement("a");
-        linkEl.href = previewHref;
-        linkEl.target = "_blank";
-        linkEl.rel = "noopener";
-        linkEl.textContent = "Open live MVP";
-        linkEl.style.display = "inline-block";
-        linkEl.style.marginTop = "0.65rem";
-        linkEl.style.fontWeight = "600";
-        codebaseMsg.content.appendChild(breakEl);
-        codebaseMsg.content.appendChild(linkEl);
-      }
-      getActiveConversationEl().appendChild(codebaseMsg.container);
-      scrollToBottom();
-      saveCurrentChat();
-      log(`Codebase assistant completed: ${codebaseList}`);
+      log(`Codebase assistant completed: ${codebaseList}${previewHref ? ` preview=${previewHref}` : ""}`);
       break;
 
     case "workspace_update_complete":
@@ -3405,6 +3386,8 @@ async function handleMessage(data) {
         scrollToBottom();
         saveCurrentChat();
         log(`VLM response: "${llmText.substring(0, 50)}..."`);
+      } else if (videoCallActive) {
+        resumeVideoCallListening('empty LLM final');
       }
       break;
 

@@ -113,3 +113,13 @@ of an executive dinner update. The codebase agent launches in the background,
 so the call can continue after "On it."; if the model ever replies with text
 instead of a tool call to a sketch/MVP request, the server now starts the
 codebase agent anyway and suppresses the verbose repeated sketch summary.
+
+Tightened the live demo flow after another manual E2E run exposed ASR fragment
+and completion-noise issues. The server now buffers incomplete sketch-build
+fragments such as "Please turn." until the next phrase, treats "I'm heading to
+dinner" / "save a brief" as Beat 1 follow-up while an MVP build is active, and
+keeps background Qwen MVP completion summaries out of both the visible chat and
+handoff conversation history. Verification passed with Python `py_compile`,
+`node --check static/js/app.js`, `git diff --check`,
+`.venv-gpu/bin/python bench/test_computex_workspace.py`, and the full
+`.venv-gpu/bin/python bench/test_demo_prompts.py` prompt E2E suite.

@@ -9,7 +9,7 @@ Beat 1 codebase build variant 2: PASS
 split transcript llm routing: PASS
 actual sketch exact routing: PASS
 ```
-**Coverage:** Verifies the intended demo line, `Hey Claw, please turn this sketch into an MVP. I'm going to dinner, write me a brief to review for when I get back.`, routes to `codebase_assistant`; the split transcript `turn the sketch into an MVP` then `Thanks, I'm going to dinner write me a brief...` does not route to `workspace_update_assistant`; and the ASR variant `Please convert this sketch to an MVP. I'm going to dinner, write me a briefer review when I get back.` also routes to `codebase_assistant`. The codebase assistant now speaks only the transient `On it.` by default and runs in the background; completion still appears in chat/workspace without interrupting later beats.
+**Coverage:** Verifies the intended demo line, `Hey Claw, please turn this sketch into an MVP. I'm going to dinner, write me a brief to review for when I get back.`, routes to `codebase_assistant`; the split transcript `turn the sketch into an MVP` then `Thanks, I'm going to dinner write me a brief...` does not route to `workspace_update_assistant`; and the ASR variant `Please convert this sketch to an MVP. I'm going to dinner, write me a briefer review when I get back.` also routes to `codebase_assistant`. The codebase assistant now speaks only `On it.` by default, runs in the background, and keeps completion details out of the live chat transcript while files, preview links, and screenshots are saved.
 
 **Feature: Qwen codebase assistant**
 **Test #00: Simple sketch quality prompt smoke**

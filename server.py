@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import secrets
 import time
 import uuid
@@ -665,8 +666,8 @@ class VoiceSession:
         conversation_states[self.conversation_id] = state
 
     async def send_transient_ack(self, message: str) -> None:
-        """Show and speak a short transient acknowledgment."""
-        await self.send_message("transient_response", {"text": message})
+        """Show and speak a short acknowledgment as a normal assistant turn."""
+        await self.send_message("final_response", {"text": message})
         await self.stream_tts(message, is_transient=True)
 
     def start_codebase_agent_task(self, task: str, context: str = "", output_dir: str = "agent_monitor_mvp") -> None:
@@ -2574,6 +2575,35 @@ const mobilePath = {json.dumps(str(mobile_path))};
             return True
         return "mvp" in lower and any(term in lower for term in ("build", "implement", "convert", "turn this", "working app"))
 
+    def is_incomplete_codebase_fragment(self, text: str) -> bool:
+        """Detect ASR fragments that likely precede 'this sketch/diagram into an MVP'."""
+        lower = " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+        if not lower:
+            return False
+        if any(term in lower for term in ("sketch", "diagram", "whiteboard", "wireframe", "mvp", "dashboard", "app")):
+            return False
+        starters = (
+            "please turn",
+            "turn",
+            "turn this",
+            "turn the",
+            "please convert",
+            "convert this",
+            "please build",
+            "build this",
+            "please make",
+            "make this",
+        )
+        return len(lower.split()) <= 5 and any(lower.endswith(starter) for starter in starters)
+
+    def codebase_intent_text(self, text: str) -> str:
+        """Join a saved ASR fragment with the next user phrase for intent routing."""
+        pending = getattr(self, "_pending_codebase_fragment", "")
+        if not pending:
+            return text
+        self._pending_codebase_fragment = ""
+        return f"{pending} {text}".strip()
+
     def has_recent_codebase_context(self) -> bool:
         """True when recent turns are about turning a sketch into a local MVP."""
         recent_parts = []
@@ -2611,7 +2641,21 @@ const mobilePath = {json.dumps(str(mobile_path))};
         if any(term in lower for term in executive_terms):
             return False
         brief_terms = ("brief", "review", "when i get back", "briefer")
-        return any(term in lower for term in brief_terms) and self.has_recent_codebase_context()
+        departure_terms = (
+            "going to dinner",
+            "go to dinner",
+            "head to dinner",
+            "heading to dinner",
+            "going to head to dinner",
+            "gonna go to dinner",
+            "gonna head to dinner",
+            "i m going to head to dinner",
+            "i m going to dinner",
+        )
+        return (
+            any(term in lower for term in brief_terms + departure_terms)
+            and self.has_recent_codebase_context()
+        )
 
     def is_workspace_update_request(self, text: str) -> bool:
         """Detect Computex executive-update commands before the VLM tool roundtrip."""
@@ -2894,15 +2938,6 @@ const mobilePath = {json.dumps(str(mobile_path))};
             else:
                 summary = "Local Qwen did not produce MVP files; I saved the failure logs for review."
 
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": (
-                    f"{summary} Codebase: {evaluation['codebase_path']}. "
-                    f"Evidence: {evaluation['run_dir']}."
-                    + (f" Preview: {preview_info['preview_url']}." if preview_info.get("preview_url") else "")
-                )
-            })
-            self.publish_handoff_state()
             await self.send_message("codebase_complete", {
                 "summary": summary,
                 "codebase_path": evaluation["codebase_path"],
@@ -3627,19 +3662,26 @@ async def voice_call(websocket: WebSocket):
                             if image_b64:
                                 print(f"[Video Call] Image: {len(image_b64)} chars base64")
 
-                                if session.is_codebase_brief_followup_request(transcription):
+                                if session.is_incomplete_codebase_fragment(transcription):
+                                    session._pending_codebase_fragment = transcription
+                                    await session.send_message("llm_final", {"text": ""})
+                                    continue
+
+                                intent_text = session.codebase_intent_text(transcription)
+
+                                if session.is_codebase_brief_followup_request(intent_text):
                                     ack = "Got it."
                                     await session.send_transient_ack(ack)
                                     session.conversation_history.append({"role": "assistant", "content": ack})
                                     session.publish_handoff_state()
                                     continue
 
-                                if session.is_workspace_update_request(transcription):
+                                if session.is_workspace_update_request(intent_text):
                                     ack = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
                                     await session.send_transient_ack(ack)
                                     await session.execute_workspace_update_agent(
                                         "Draft the team update and personal follow-up",
-                                        f"Phone handwritten-note request: {transcription}",
+                                        f"Phone handwritten-note request: {intent_text}",
                                         [],
                                     )
                                     continue
@@ -3707,7 +3749,7 @@ async def voice_call(websocket: WebSocket):
                                     # Non-streaming mode with tool support
                                     vlm_result = await vlm.analyze_image(
                                         image_b64,
-                                        transcription,
+                                        intent_text,
                                         system_prompt=system_prompt,
                                         tools=enabled_tool_defs,
                                         history=recent_history
@@ -3840,7 +3882,7 @@ async def voice_call(websocket: WebSocket):
                                                 else:
                                                     await session.stream_tts(synth_text)
                                     else:
-                                        if session.is_codebase_build_request(transcription):
+                                        if session.is_codebase_build_request(intent_text):
                                             ack = "On it."
                                             await session.send_transient_ack(ack)
                                             fallback_context = response_text or (
@@ -3848,7 +3890,7 @@ async def voice_call(websocket: WebSocket):
                                                 "dashboard, activity feed, task history, overview cards, agent list, and run history."
                                             )
                                             session.start_codebase_agent_task(
-                                                transcription,
+                                                intent_text,
                                                 fallback_context,
                                                 "agent_monitor_mvp",
                                             )
@@ -3870,7 +3912,7 @@ async def voice_call(websocket: WebSocket):
                                     response_text = ""
                                     async for chunk in vlm.stream_analyze_image(
                                         image_b64,
-                                        transcription,
+                                        intent_text,
                                         system_prompt=system_prompt,
                                         history=recent_history
                                     ):

@@ -139,8 +139,19 @@ ignored
         split_followup = "Thanks, I'm going to dinner write me a brief to review for when I get back"
         assert session.is_codebase_brief_followup_request(split_followup)
         assert not session.is_workspace_update_request(split_followup)
+        departure_followup = "Thanks. I'm going to head to dinner, but..."
+        assert session.is_codebase_brief_followup_request(departure_followup)
+        assert not session.is_workspace_update_request(departure_followup)
+        assert session.is_codebase_brief_followup_request("Save a brief for me.")
         assert not session.is_workspace_update_request("Dinner was fun; write me a brief when I get back")
         assert not session.is_workspace_update_request("Add these to the project")
+        partial_fragment = "Awesome. Please turn."
+        assert session.is_incomplete_codebase_fragment(partial_fragment)
+        assert not session.is_incomplete_codebase_fragment("Please turn the camera")
+        session._pending_codebase_fragment = partial_fragment
+        combined_request = session.codebase_intent_text("diagram into a front-end MVP.")
+        assert session.is_codebase_build_request(combined_request)
+        assert not getattr(session, "_pending_codebase_fragment", "")
 
         todos = session.extract_workspace_todos("Update my team", request, [])
         assert any("Avery" in item for item in todos), todos
