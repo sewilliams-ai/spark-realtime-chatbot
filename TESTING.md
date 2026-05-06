@@ -35,6 +35,23 @@ handoff static assertions: PASS
 No output. Command exited successfully.
 ```
 
+**Feature: Full demo prompt regression**
+**Test #2: Checked-in live E2E prompt suite**
+**Status:** PASS
+**Code Command**: `.venv-gpu/bin/python bench/test_demo_prompts.py`
+**Result**:
+```bash
+demo prompt e2e: url=http://localhost:11434/v1/chat/completions model=qwen3.6:35b-a3b
+Cold open: PASS :: Yep. You're on camera, audio is clear, and I'm ready. (2090ms)
+Beat 1 README tool: PASS :: markdown_assistant with README.md and React/FastAPI/MySQL context. (3499ms)
+Beat 1 improvement: PASS :: Polling MySQL for dashboard updates won't scale. I'd keep MySQL as the source of truth, but add Redis pub/sub between FastAPI instances for realtime fanout. I can sketch that design. (1176ms)
+Beat 1 realtime design tool: PASS :: markdown_assistant with realtime_design.md and Redis pub/sub context. (2301ms)
+Beat 2 fashion: PASS :: Yep. The dark jacket reads professional and polished, which is a nice upgrade despite the late-night coding. (2159ms)
+Beat 3 menu: PASS :: Recommends visible lighter items over salty visible items without private health labels or raw digits. (2169ms)
+Beat 4 todo routing tool: PASS :: workspace_update_assistant with all six visible handwritten items. (4474ms)
+demo prompt e2e: PASS
+```
+
 **Feature: Beat 3 private health context**
 **Test #1: Health context loader privacy safety (Test A)**
 **Status:** PASS
