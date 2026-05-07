@@ -42,6 +42,7 @@ demo_files/health.yaml
 demo_files/whoop_auth.json
 test_assets/
 workspace/*_mvp/
+workspace_archive/
 *.wav
 *.webm
 *.mp3
