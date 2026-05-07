@@ -169,3 +169,57 @@ Failure modes observed before hardening:
   **67.9 seconds**.
 - Verified routes: `/generated/agent_monitor_preview_mvp/` for the UI and
   `/generated/agent_monitor_preview_mvp/api/tasks` for the generated API.
+
+## Workspace Update Assistant Ack Evaluation - 2026-05-07
+
+Manual Beat 3 testing improved after `[fix] simplify workspace update ack`, but
+the generic `On it.` acknowledgement is now under-specified for the explicit
+personal gift follow-up:
+
+- Team update turn: "send an email to my team updating them about dinner..."
+  should get a short generic acknowledgement and write team/action files.
+- Personal follow-up turn: "update my personal to-dos to buy pineapple cakes
+  for my significant other..." should acknowledge the local gift memory:
+  "You got him that last year; maybe get high mountain oolong tea?"
+
+Current code surfaces:
+
+- `tools.py:392-416` exposes `workspace_update_assistant` as a UI-agent
+  sentinel for executive updates, dinner debriefs, action items, and personal
+  todos.
+- `prompts.py:498-504` gives Qwen semantic routing guidance: business/field/
+  hardware partners are not personal gift context, while personal souvenir,
+  husband/significant other, and pineapple-cake requests are gift context.
+- `server.py:2933-2999` has deterministic text routing for workspace updates,
+  so many Beat 3 turns bypass the VLM/tool-call decision entirely.
+- `server.py:3090-3103` sends the spoken acknowledgement and then calls
+  `execute_workspace_update_agent()`.
+- `server.py:3104-3129` writes files and emits `workspace_update_complete`
+  without speaking a second completion summary.
+
+Options evaluated:
+
+1. Prompt-only: cleanest architecture, but insufficient for the deterministic
+   server shortcut because `handle_workspace_update_request()` already speaks
+   before Qwen can generate a nuanced follow-up.
+2. Full VLM-generated follow-up after tool selection: ideal long-term behavior,
+   but higher latency/complexity and more risk before the demo because it
+   requires another model turn or restructuring the agent-tool loop.
+3. Minimal server branch: if the current user text contains explicit personal
+   gift markers such as `pineapple cakes`, `souvenir`, `husband`, or
+   `significant other`, speak the fixed gift-memory line; otherwise speak
+   `On it.`. This is the recommended short-term path because it is small,
+   local to existing `server.py` acknowledgement logic, and matches the current
+   deterministic routing design.
+
+Recommended next patch: add a tiny helper near the existing `is_*_request`
+helpers, for example `is_personal_gift_followup(text)`, and use it only to
+select the acknowledgement inside `handle_workspace_update_request()`. Do not
+add a new module, do not add a new tool, and do not change
+`execute_workspace_update_agent()` file-writing behavior.
+
+Implementation note: the patch adds `is_personal_gift_followup()` and
+`workspace_update_feedback()` in `server.py`, then uses the helper in the
+deterministic workspace-update route and both Qwen tool-call acknowledgement
+paths. This keeps normal team updates at `On it.` while giving the explicit
+pineapple-cakes/significant-other follow-up the fixed oolong suggestion.

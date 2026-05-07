@@ -1459,7 +1459,7 @@ class VoiceSession:
                                         feedback_msg = "Let me think through this..."
                                         break
                                     if tc.get("function", {}).get("name") == "workspace_update_assistant":
-                                        feedback_msg = "On it."
+                                        feedback_msg = self.workspace_update_feedback(user_text)
                                         break
                                     if tc.get("function", {}).get("name") == "html_assistant":
                                         feedback_msg = "On it. I'll build the prototype."
@@ -2789,6 +2789,25 @@ const mobilePath = {json.dumps(str(mobile_path))};
             return True
         return lower in {"camera", "on camera"}
 
+    def is_personal_gift_followup(self, text: str) -> bool:
+        """Detect the explicit pineapple-cakes souvenir follow-up for Beat 3."""
+        lower = " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+        if not lower:
+            return False
+        return (
+            "pineapple" in lower
+            or (
+                any(term in lower for term in ("souvenir", "gift", "oolong"))
+                and any(term in lower for term in ("husband", "significant other", "spouse", "partner"))
+            )
+        )
+
+    def workspace_update_feedback(self, text: str) -> str:
+        """Choose the short spoken ack for workspace updates."""
+        if self.is_personal_gift_followup(text):
+            return "You got him pineapple cakes last year; maybe get high mountain oolong tea?"
+        return "On it."
+
     def is_incomplete_codebase_fragment(self, text: str) -> bool:
         """Detect ASR fragments that likely precede 'this sketch/diagram into an MVP'."""
         lower = " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
@@ -3090,7 +3109,7 @@ const mobilePath = {json.dumps(str(mobile_path))};
     async def handle_workspace_update_request(self, user_text: str, items: list = None):
         """Deterministically execute the Computex team-update/personal-todo beat."""
         self._workspace_update_started_at = time.time()
-        ack = "On it."
+        ack = self.workspace_update_feedback(user_text)
         await self.send_transient_ack(ack)
         self.conversation_history.append({"role": "assistant", "content": ack})
         self.publish_handoff_state()
@@ -4210,7 +4229,13 @@ async def voice_call(websocket: WebSocket):
                                                 "workspace_update_assistant",
                                             ):
                                                 if tool_name == "workspace_update_assistant":
-                                                    ack = "On it."
+                                                    tool_context = " ".join([
+                                                        intent_text,
+                                                        str(args.get("task", "")),
+                                                        str(args.get("context", "")),
+                                                        " ".join(str(item) for item in args.get("items", []) if item),
+                                                    ])
+                                                    ack = session.workspace_update_feedback(tool_context)
                                                 elif tool_name == "codebase_assistant":
                                                     ack = "On it."
                                                 else:

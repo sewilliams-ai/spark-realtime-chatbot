@@ -131,6 +131,35 @@ canonical overnight reference.
 | 8 | Implement the Qwen-backed coding sub-agent that writes code into `workspace/` without OpenClaw/Codex/Claude fallback | completed |
 | 9 | Decide demo path: Qwen-built simple MVP is viable; README/brief remains only the contingency fallback if live generation regresses | completed |
 | 10 | Add same-origin live preview routing so successful generated MVPs run behind the current Spark URL and completion messages include an openable link | completed |
+| 11 | Evaluate `workspace_update_assistant` spoken feedback strategy after manual Beat 3 testing exposed generic `On it.` for both team update and personal gift follow-up | completed |
+| 12 | Implement minimal personal-gift acknowledgement branch for `workspace_update_assistant` and add deterministic regression coverage | completed |
+
+## Workspace Update Follow-Up Recommendation - 2026-05-07
+
+Current state: `workspace_update_assistant` writes the right local files, but
+its generic spoken acknowledgement is now too flat for the personal gift
+follow-up. The server currently has three relevant layers:
+
+1. `tools.py` exposes the `workspace_update_assistant` tool schema to Qwen.
+2. `prompts.py` tells Qwen when to call the tool and how to separate business
+   partners from personal gift context.
+3. `server.py` also has deterministic shortcuts that call
+   `handle_workspace_update_request()` without waiting for a VLM/tool roundtrip.
+
+Recommended path: use a minimal server-side spoken acknowledgement branch only
+inside `handle_workspace_update_request()`. Keep the workspace file-writing
+logic unchanged and keep prompt/tool schema as the semantic source of truth.
+The server branch should be small and explicit: if the current user text
+contains `pineapple cakes` or a personal souvenir phrase, speak the fixed
+gift-memory line; otherwise speak `On it.`. This is less flexible than a full
+VLM-generated follow-up, but it is the lowest-risk demo fix because the current
+deterministic shortcut already bypasses Qwen for many Beat 3 turns.
+
+Implementation result: added a tiny personal-gift acknowledgement branch in
+`server.py` without introducing a new module, tool, or model roundtrip. Generic
+team updates still speak `On it.`. Explicit pineapple-cakes/personal-souvenir
+follow-ups speak the fixed high-mountain-oolong suggestion before the existing
+workspace file update runs.
 
 ## Tests
 

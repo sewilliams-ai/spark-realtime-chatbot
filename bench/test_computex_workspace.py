@@ -176,6 +176,18 @@ ignored
         assert session.is_camera_check_request("Hey, am I on camera?")
         assert session.is_camera_check_request("camera.")
         assert not session.is_camera_check_request("Please turn the camera")
+        assert not session.is_personal_gift_followup(
+            "Dinner with the field partners went well and they asked for a Taipei hackathon."
+        )
+        assert session.is_personal_gift_followup(
+            "Update my personal to-dos to buy pineapple cakes for my significant other while still traveling."
+        )
+        assert session.workspace_update_feedback(
+            "Send an email update to my team about dinner with the field partners."
+        ) == "On it."
+        assert "high mountain oolong tea" in session.workspace_update_feedback(
+            "Add a personal to-do to buy pineapple cakes for my significant other."
+        )
         session.conversation_history = [
             {"role": "user", "content": "Please send an update to my team saying the strategic partnership is on track."},
             {"role": "assistant", "content": "On it."},
@@ -300,6 +312,17 @@ ignored
         routed_team = (root / "workspace" / "team_update.md").read_text()
         assert "Q3 of 2026" in routed_team
         assert "team@spark-demo.local" in routed_team
+
+        sent.clear()
+        session.conversation_history = [{"role": "system", "content": "demo"}]
+        asyncio.run(session.handle_workspace_update_request(
+            "Awesome, thanks. Last thing, update my personal to-dos to buy pineapple cakes for my significant other while still traveling."
+        ))
+        assert any(
+            "high mountain oolong tea" in data.get("text", "")
+            for msg_type, data in sent
+            if msg_type == "final_response"
+        ), sent
 
     print("computex workspace routing: PASS")
     return 0

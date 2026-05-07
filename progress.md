@@ -158,3 +158,29 @@ full email/summary aloud. Generated MVP preview links now default to
 passed with Python `py_compile`, `node --check static/js/app.js`,
 `git diff --check`, `.venv-gpu/bin/python bench/test_computex_workspace.py`, and
 `.venv-gpu/bin/python bench/test_demo_prompts.py`.
+
+## Session 2026-05-07 - workspace update acknowledgement evaluation
+
+Used `planning-with-files` to evaluate the latest Beat 3 manual-test issue
+without implementing a code patch yet. Current state: `workspace_update_assistant`
+file writing is reliable, but generic `On it.` feedback is too flat for the
+explicit pineapple-cakes personal gift follow-up. The codebase has both prompt
+semantics and deterministic server shortcuts; because `handle_workspace_update_request()`
+can speak before Qwen/VLM produces a nuanced response, a prompt-only fix is not
+enough for the current architecture. Recommendation logged in `task_plan.md`
+and `findings.md`: add a minimal server-side acknowledgement branch inside
+`handle_workspace_update_request()` only, using explicit personal gift markers
+to speak the fixed oolong suggestion and using `On it.` for normal team updates.
+
+Implemented the minimal Beat 3 acknowledgement branch. Added
+`is_personal_gift_followup()` and `workspace_update_feedback()` in `server.py`
+and reused the feedback helper for deterministic workspace updates plus
+workspace-update tool-call acknowledgements. Added deterministic coverage so a
+field-partners/hackathon team update still speaks `On it.`, while the explicit
+pineapple-cakes/significant-other follow-up speaks the high-mountain-oolong
+suggestion.
+
+Verification passed with `.venv-gpu/bin/python -m py_compile server.py
+bench/test_computex_workspace.py`, `.venv-gpu/bin/python
+bench/test_computex_workspace.py`, `node --check static/js/app.js`, and
+`git diff --check`.
