@@ -19,6 +19,8 @@ let masterGainNode = null; // For instant muting on barge-in
 let ttsAborted = false; // Block new audio after barge-in
 let nextPlayTime = null;
 let ttsPlaybackGeneration = 0;
+let ttsServerDone = true;
+let pendingTtsAudioChunks = 0;
 let currentTransientMsg = null;
 let currentUserMsg = null;  // Track current user message being built
 let lastCodebaseResult = null;
@@ -2436,6 +2438,7 @@ function connectVoiceWebSocket() {
   log(`Connecting to WebSocket: ${wsUrl}`);
   setConnectionStatus("connecting");
   voiceWs = new WebSocket(wsUrl);
+  voiceWs.binaryType = "arraybuffer";
   
   // Add connection timeout
   const connectionTimeout = setTimeout(() => {
@@ -3598,6 +3601,7 @@ async function handleMessage(data) {
       // TTS streaming started
       log(`TTS started (transient: ${data.is_transient})`);
       ttsPlaybackGeneration += 1;
+      ttsServerDone = false;
       isTtsPlaying = true;
       ttsAborted = false; // Reset abort flag for new TTS
       
@@ -3654,14 +3658,15 @@ async function handleMessage(data) {
       // TTS streaming complete (server done sending chunks)
       // But audio may still be playing in the browser!
       log(`TTS done from server (transient: ${data.is_transient}), active sources: ${activeAudioSources.length}`);
+      ttsServerDone = true;
       
       // Only set isTtsPlaying=false if no audio sources are still playing
       // Otherwise, the source.onended handler will set it to false
       const doneGeneration = ttsPlaybackGeneration;
-      if (activeAudioSources.length === 0) {
+      if (activeAudioSources.length === 0 && pendingTtsAudioChunks === 0) {
         finishTtsPlayback('TTS playback', doneGeneration);
       } else {
-        log(`Audio still playing (${activeAudioSources.length} sources), keeping isTtsPlaying=true`);
+        log(`Audio still playing (${activeAudioSources.length} sources, ${pendingTtsAudioChunks} pending), keeping isTtsPlaying=true`);
         scheduleTtsRecovery('tts_done', doneGeneration);
       }
       break;
@@ -3717,78 +3722,81 @@ async function handleAudioChunk(data) {
     log('Audio chunk discarded (TTS aborted)');
     return;
   }
-  
-  // Initialize audio context if not already done
-  if (!audioContext) {
-    log("Initializing audio context for first chunk");
-    try {
-      audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-      nextPlayTime = audioContext.currentTime;
-      log(`Audio context created, state: ${audioContext.state}`);
-      
-      // Resume audio context if suspended (browser autoplay policy)
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume();
-        log(`Audio context resumed, new state: ${audioContext.state}`);
-      }
-    } catch (e) {
-      log("Error initializing audio context: " + e);
-      return;
-    }
-  }
 
-  // Ensure audio context exists and is running
-  if (!audioContext) {
-    initializeAudioContext();
-  }
-  
-  if (audioContext && audioContext.state === 'suspended') {
-    try {
-      await audioContext.resume();
-      log(`Audio context resumed from suspended state`);
-    } catch (e) {
-      // Browser autoplay policy may prevent this - user needs to interact first
-      log("Audio context resume blocked (user interaction required)");
-      // Don't throw - we'll try again on next chunk after user interaction
-      return;
-    }
-  }
+  const chunkGeneration = ttsPlaybackGeneration;
+  pendingTtsAudioChunks += 1;
 
-  const arrayBuffer = data instanceof Blob ? await data.arrayBuffer() : data;
-  
-  if (arrayBuffer.byteLength === 0) {
-    log("Empty audio chunk received, skipping");
-    return;
-  }
-  
-  const int16Data = new Int16Array(arrayBuffer);
-  
-  if (int16Data.length === 0) {
-    log("Empty int16 array, skipping");
-    return;
-  }
-  
-  // Convert Int16 to Float32
-  const float32Data = new Float32Array(int16Data.length);
-  for (let i = 0; i < float32Data.length; i++) {
-    float32Data[i] = int16Data[i] / 32768.0;
-  }
-  
-  // Create buffer and play
   try {
+    // Initialize audio context if not already done
+    if (!audioContext) {
+      log("Initializing audio context for first chunk");
+      try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+        nextPlayTime = audioContext.currentTime;
+        log(`Audio context created, state: ${audioContext.state}`);
+
+        // Resume audio context if suspended (browser autoplay policy)
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume();
+          log(`Audio context resumed, new state: ${audioContext.state}`);
+        }
+      } catch (e) {
+        log("Error initializing audio context: " + e);
+        return;
+      }
+    }
+
+    // Ensure audio context exists and is running
+    if (!audioContext) {
+      initializeAudioContext();
+    }
+
+    if (audioContext && audioContext.state === 'suspended') {
+      try {
+        await audioContext.resume();
+        log(`Audio context resumed from suspended state`);
+      } catch (e) {
+        // Browser autoplay policy may prevent this - user needs to interact first
+        log("Audio context resume blocked (user interaction required)");
+        // Don't throw - we'll try again on next chunk after user interaction
+        return;
+      }
+    }
+
+    const arrayBuffer = data instanceof Blob ? await data.arrayBuffer() : data;
+
+    if (arrayBuffer.byteLength === 0) {
+      log("Empty audio chunk received, skipping");
+      return;
+    }
+
+    const int16Data = new Int16Array(arrayBuffer);
+
+    if (int16Data.length === 0) {
+      log("Empty int16 array, skipping");
+      return;
+    }
+
+    // Convert Int16 to Float32
+    const float32Data = new Float32Array(int16Data.length);
+    for (let i = 0; i < float32Data.length; i++) {
+      float32Data[i] = int16Data[i] / 32768.0;
+    }
+
+    // Create buffer and play
     const buffer = audioContext.createBuffer(1, float32Data.length, 24000);
     buffer.copyToChannel(float32Data, 0);
-    
+
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
-    
+
     // Use master gain node for instant muting (barge-in)
     if (!masterGainNode) {
       masterGainNode = audioContext.createGain();
       masterGainNode.connect(audioContext.destination);
     }
     source.connect(masterGainNode);
-    
+
     // Track this source for potential barge-in stop
     activeAudioSources.push(source);
     const sourceGeneration = ttsPlaybackGeneration;
@@ -3798,24 +3806,33 @@ async function handleAudioChunk(data) {
       
       // When last audio source ends, TTS is truly done playing
       if (activeAudioSources.length === 0) {
-        log('All audio sources finished playing');
-        finishTtsPlayback('audio sources finished', sourceGeneration);
+        if (ttsServerDone && pendingTtsAudioChunks === 0) {
+          log('All audio sources finished playing');
+          finishTtsPlayback('audio sources finished', sourceGeneration);
+        } else {
+          log(`Audio sources drained before TTS completion (${pendingTtsAudioChunks} pending); keeping TTS active`);
+        }
       }
     };
-    
+
     // Schedule playback
     if (nextPlayTime === null || nextPlayTime < audioContext.currentTime) {
       nextPlayTime = audioContext.currentTime;
     }
-    
+
     const playTime = nextPlayTime;
     source.start(playTime);
     nextPlayTime = playTime + buffer.duration;
-    
+
     log(`Playing audio chunk: ${buffer.duration.toFixed(3)}s at ${playTime.toFixed(3)}s (${int16Data.length} samples), context state: ${audioContext.state}`);
   } catch (e) {
     log("Error playing audio chunk: " + e + ", audio context state: " + (audioContext ? audioContext.state : 'null'));
     console.error("Audio playback error:", e);
+  } finally {
+    pendingTtsAudioChunks = Math.max(0, pendingTtsAudioChunks - 1);
+    if (ttsServerDone && activeAudioSources.length === 0 && !ttsAborted) {
+      finishTtsPlayback('queued audio chunks drained', chunkGeneration);
+    }
   }
 }
 
