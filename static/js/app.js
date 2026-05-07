@@ -18,6 +18,7 @@ let activeAudioSources = []; // Track active audio sources for barge-in
 let masterGainNode = null; // For instant muting on barge-in
 let ttsAborted = false; // Block new audio after barge-in
 let nextPlayTime = null;
+let ttsPlaybackGeneration = 0;
 let currentTransientMsg = null;
 let currentUserMsg = null;  // Track current user message being built
 let lastCodebaseResult = null;
@@ -1177,7 +1178,9 @@ function resumeVideoCallListening(reason, delayMs = 100) {
   }
 }
 
-function finishTtsPlayback(reason) {
+function finishTtsPlayback(reason, generation = ttsPlaybackGeneration) {
+  if (generation !== ttsPlaybackGeneration) return;
+
   isTtsPlaying = false;
   videoCallProcessing = false;
   lastTtsEndTime = Date.now();
@@ -1188,14 +1191,14 @@ function finishTtsPlayback(reason) {
   resumeVideoCallListening(reason, 500);
 }
 
-function scheduleTtsRecovery(reason) {
+function scheduleTtsRecovery(reason, generation = ttsPlaybackGeneration) {
   if (!audioContext || nextPlayTime === null) return;
 
   const remainingMs = Math.max(0, (nextPlayTime - audioContext.currentTime) * 1000);
   const recoveryDelayMs = Math.max(1000, remainingMs + 750);
 
   setTimeout(() => {
-    if (!isTtsPlaying || activeAudioSources.length === 0) return;
+    if (generation !== ttsPlaybackGeneration || !isTtsPlaying) return;
 
     log(`TTS playback recovery after ${reason}; clearing ${activeAudioSources.length} stale source(s)`);
     activeAudioSources.forEach(source => {
@@ -3594,6 +3597,7 @@ async function handleMessage(data) {
     case "tts_start":
       // TTS streaming started
       log(`TTS started (transient: ${data.is_transient})`);
+      ttsPlaybackGeneration += 1;
       isTtsPlaying = true;
       ttsAborted = false; // Reset abort flag for new TTS
       
@@ -3653,11 +3657,12 @@ async function handleMessage(data) {
       
       // Only set isTtsPlaying=false if no audio sources are still playing
       // Otherwise, the source.onended handler will set it to false
+      const doneGeneration = ttsPlaybackGeneration;
       if (activeAudioSources.length === 0) {
-        finishTtsPlayback('TTS playback');
+        finishTtsPlayback('TTS playback', doneGeneration);
       } else {
         log(`Audio still playing (${activeAudioSources.length} sources), keeping isTtsPlaying=true`);
-        scheduleTtsRecovery('tts_done');
+        scheduleTtsRecovery('tts_done', doneGeneration);
       }
       break;
 
@@ -3786,6 +3791,7 @@ async function handleAudioChunk(data) {
     
     // Track this source for potential barge-in stop
     activeAudioSources.push(source);
+    const sourceGeneration = ttsPlaybackGeneration;
     source.onended = () => {
       const idx = activeAudioSources.indexOf(source);
       if (idx > -1) activeAudioSources.splice(idx, 1);
@@ -3793,7 +3799,7 @@ async function handleAudioChunk(data) {
       // When last audio source ends, TTS is truly done playing
       if (activeAudioSources.length === 0) {
         log('All audio sources finished playing');
-        finishTtsPlayback('audio sources finished');
+        finishTtsPlayback('audio sources finished', sourceGeneration);
       }
     };
     
