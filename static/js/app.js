@@ -1201,6 +1201,14 @@ function scheduleTtsRecovery(reason, generation = ttsPlaybackGeneration) {
 
   setTimeout(() => {
     if (generation !== ttsPlaybackGeneration || !isTtsPlaying) return;
+    if (!audioContext || nextPlayTime === null) return;
+
+    const currentRemainingMs = Math.max(0, (nextPlayTime - audioContext.currentTime) * 1000);
+    if (pendingTtsAudioChunks > 0 || currentRemainingMs > 250) {
+      log(`TTS playback recovery deferred after ${reason}: ${activeAudioSources.length} source(s), ${pendingTtsAudioChunks} pending, ${Math.round(currentRemainingMs)}ms remaining`);
+      scheduleTtsRecovery(reason, generation);
+      return;
+    }
 
     log(`TTS playback recovery after ${reason}; clearing ${activeAudioSources.length} stale source(s)`);
     activeAudioSources.forEach(source => {
