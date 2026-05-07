@@ -184,3 +184,33 @@ Verification passed with `.venv-gpu/bin/python -m py_compile server.py
 bench/test_computex_workspace.py`, `.venv-gpu/bin/python
 bench/test_computex_workspace.py`, `node --check static/js/app.js`, and
 `git diff --check`.
+
+## Session 2026-05-07 - mute toggle investigation
+
+Started a scoped `planning-with-files` debug pass for inconsistent mute
+behavior. Restored context from root planning files, confirmed the branch is
+`claw`, and left pre-existing user/untracked files alone. Initial search found
+three browser audio paths that can send speech to ASR: voice-call VAD
+`asr_audio`, video-call VAD `video_call_data`, and video-call push-to-talk
+`video_call_data`. The server appears to transcribe received audio without an
+explicit mute flag, so the next step is to confirm whether every client send
+path checks current mute state and clears in-flight buffers on toggle.
+
+Compared current `server.py` against known-good commit `9ed5710`. The old
+server had no mute state and accepted any audio sent by the browser; current
+server still has no mute state, so "muted but heard" points back to frontend
+capture/send gating. The current server does add handoff ownership gates around
+binary ASR, `asr_audio`, `video_call_data`, and `text_message`; those gates can
+explain "unmuted but ignored" if a client is connected but handoff-pending or
+stale/non-owner. Began a narrow frontend patch to make mute a real capture/send
+gate by pausing VAD, discarding active PTT buffers, and checking mute revisions
+inside async send callbacks.
+
+Completed the scoped mute fix in `static/js/app.js`. Voice-call and video-call
+VAD now drop speech that crosses a mute boundary, mute toggles pause/resume VAD
+instead of only changing button state, video PTT disables its audio tracks and
+discards active MediaRecorder chunks when muted, and TTS/error resume paths no
+longer restart VAD while muted. Verification passed: `node --check
+static/js/app.js`, `git diff --check`, `.venv-gpu/bin/python
+bench/test_handoff.py`, and a one-off static guard check for all muted audio
+send paths.

@@ -223,3 +223,41 @@ Implementation note: the patch adds `is_personal_gift_followup()` and
 deterministic workspace-update route and both Qwen tool-call acknowledgement
 paths. This keeps normal team updates at `On it.` while giving the explicit
 pineapple-cakes/significant-other follow-up the fixed oolong suggestion.
+
+## Mute Toggle Investigation - 2026-05-07
+
+Initial audit: audio is captured and sent from `static/js/app.js`, while
+`server.py` transcribes whatever `asr_audio` or `video_call_data` arrives. The
+server does not currently receive or enforce a client mute flag. Search found
+three client-side audio send paths that must agree on mute behavior: voice-call
+VAD, video-call VAD, and video-call push-to-talk/media-recorder. Next step is
+to inspect whether all three paths check the current mute flag immediately
+before sending, and whether toggling mute also stops/clears any in-flight VAD
+or recorder buffers.
+
+Root cause candidate confirmed in `static/js/app.js`: mute toggles currently
+mostly update booleans and UI. The voice-call and video-call VAD callbacks
+check the mute flag at `onSpeechStart`/`onSpeechEnd`, but the actual async send
+functions do not re-check the mute flag immediately before websocket send. This
+creates a race where audio that ended just before or during a mute toggle can
+still be sent after the `FileReader` callback completes. Video push-to-talk has
+the same issue: recording start checks `videoCallMuted`, but if the user mutes
+while a MediaRecorder is active, `onstop` still processes the buffered audio
+and `sendVideoCallData()` can send it. Mute also does not pause/restart VAD or
+clear speaking/processing state, so muting mid-utterance can leave stale client
+state that explains the opposite symptom where unmuted audio is not picked up
+reliably.
+
+`server.py` comparison against known-good commit `9ed5710`: the old server had
+no explicit mute state and accepted any `asr_audio`, `video_call_data`, or
+binary ASR chunk received on the websocket. Current `server.py` still has no
+explicit mute state; the audio decode/transcribe branches are substantially the
+same shape. The important new server-side behavior is handoff ownership gating:
+when `handoff_pending` is true, audio/control turns are rejected with
+`handoff_required`, and when a session is not the active conversation owner,
+audio/control turns close the stale session. This can explain the "unmuted but
+not picked up" symptom if frontend ownership state is stale after a handoff,
+but it cannot explain "muted but still picked up" unless the browser still sent
+audio. Current server also filters recent assistant TTS echoes, which could
+make some captured audio appear ignored, but only when ASR text matches recent
+spoken assistant output.

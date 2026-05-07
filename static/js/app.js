@@ -543,6 +543,8 @@ async function startHandoffFromModal() {
 let voiceCallActive = false;
 let vadInstance = null;
 let voiceCallMuted = false;
+let voiceCallMuteRevision = 0;
+let voiceCallDropCurrentSpeech = false;
 let voiceCallAudioContext = null;
 let voiceCallAnalyser = null;
 let waveformBars = [];
@@ -579,7 +581,11 @@ async function setupVoiceCallMode() {
       minSpeechFrames: 3,
       
       onSpeechStart: () => {
-        if (voiceCallMuted) return;
+        if (voiceCallMuted) {
+          voiceCallDropCurrentSpeech = true;
+          isCurrentlySpeaking = false;
+          return;
+        }
         log('VAD: Speech started');
 
         // BARGE-IN: If TTS is playing and barge-in is enabled, stop it
@@ -595,11 +601,18 @@ async function setupVoiceCallMode() {
         currentUserMsg = null;
 
         isCurrentlySpeaking = true;
+        voiceCallDropCurrentSpeech = false;
         audioChunks = [];
       },
       
       onSpeechEnd: (audio) => {
-        if (voiceCallMuted) return;
+        if (voiceCallMuted || voiceCallDropCurrentSpeech) {
+          log('VAD: Dropping speech because voice call is muted');
+          isCurrentlySpeaking = false;
+          voiceCallDropCurrentSpeech = false;
+          updateVoiceCallStatus('listening', voiceCallMuted ? 'Muted' : 'Listening...');
+          return;
+        }
 
         // Calculate and display energy level
         const energy = calculateRmsEnergy(audio);
@@ -709,6 +722,13 @@ function updateVoiceCallStatus(state, text) {
 }
 
 async function sendVoiceCallAudio(audioFloat32) {
+  const muteRevisionAtStart = voiceCallMuteRevision;
+  if (voiceCallMuted) {
+    log('Voice call muted, dropping audio before send');
+    updateVoiceCallStatus('listening', 'Muted');
+    return;
+  }
+
   if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) {
     log('WebSocket not connected, cannot send audio');
     updateVoiceCallStatus('listening', 'Not connected');
@@ -722,6 +742,18 @@ async function sendVoiceCallAudio(audioFloat32) {
     // Convert to base64 or send as binary
     const reader = new FileReader();
     reader.onload = async () => {
+      if (voiceCallMuted || muteRevisionAtStart !== voiceCallMuteRevision) {
+        log('Voice call muted before websocket send, dropping audio');
+        updateVoiceCallStatus('listening', voiceCallMuted ? 'Muted' : 'Listening...');
+        return;
+      }
+
+      if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) {
+        log('WebSocket disconnected before voice call audio send');
+        updateVoiceCallStatus('listening', 'Not connected');
+        return;
+      }
+
       const base64 = reader.result.split(',')[1];
       
       // Send audio for ASR
@@ -779,13 +811,30 @@ function float32ToWav(float32Array, sampleRate) {
 
 function toggleVoiceCallMute() {
   voiceCallMuted = !voiceCallMuted;
+  voiceCallMuteRevision += 1;
   const btn = document.getElementById('voiceCallMuteBtn');
   
   if (voiceCallMuted) {
+    voiceCallDropCurrentSpeech = true;
+    isCurrentlySpeaking = false;
+    audioChunks = [];
+    if (vadInstance) {
+      try {
+        vadInstance.pause();
+        log('Voice VAD paused for mute');
+      } catch (e) {}
+    }
     btn.classList.add('muted');
     btn.textContent = '🔇';
     updateVoiceCallStatus('listening', 'Muted');
   } else {
+    voiceCallDropCurrentSpeech = false;
+    if (vadInstance && voiceCallActive) {
+      try {
+        vadInstance.start();
+        log('Voice VAD resumed after unmute');
+      } catch (e) {}
+    }
     btn.classList.remove('muted');
     btn.textContent = '🎤';
     updateVoiceCallStatus('listening', 'Listening...');
@@ -851,6 +900,8 @@ function teardownVoiceCallMode() {
 let videoCallActive = false;
 let videoCallVadInstance = null;
 let videoCallMuted = false;
+let videoCallMuteRevision = 0;
+let videoCallDropCurrentSpeech = false;
 let videoCallCameraOn = true;
 let videoCallStream = null;
 let videoCallFacingMode = 'user';
@@ -874,6 +925,7 @@ let pttMediaRecorder = null;
 let pttAudioChunks = [];
 let pttAudioContext = null;
 let pttStream = null;
+let pttDiscardCurrentRecording = false;
 
 // Default video call system prompt
 const DEFAULT_VIDEO_CALL_PROMPT = `You are on a live video call. You can see the user. Respond ONLY to what they ask.
@@ -928,7 +980,11 @@ async function setupVideoCallMode() {
       minSpeechFrames: 3,
       
       onSpeechStart: () => {
-        if (videoCallMuted) return;
+        if (videoCallMuted) {
+          videoCallDropCurrentSpeech = true;
+          videoCallSpeaking = false;
+          return;
+        }
         
         // Ignore VAD in PTT mode (safety check)
         if (pttMode) {
@@ -957,10 +1013,17 @@ async function setupVideoCallMode() {
         currentUserMsg = null;
 
         videoCallSpeaking = true;
+        videoCallDropCurrentSpeech = false;
       },
       
       onSpeechEnd: (audio) => {
-        if (videoCallMuted) return;
+        if (videoCallMuted || videoCallDropCurrentSpeech) {
+          log('Video VAD: Dropping speech because video call is muted');
+          videoCallSpeaking = false;
+          videoCallDropCurrentSpeech = false;
+          updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : (pttMode ? 'Press SPACE or hold button to talk' : 'Listening...'));
+          return;
+        }
 
         // Calculate and display energy level
         const energy = calculateRmsEnergy(audio);
@@ -1102,9 +1165,9 @@ function resumeVideoCallListening(reason) {
     updateVideoCallStatus('listening', pttMode ? 'Press SPACE or hold button to talk' : 'Listening...');
   }
 
-  if (videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying) {
+  if (videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying && !videoCallMuted) {
     setTimeout(() => {
-      if (!videoCallProcessing && videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying) {
+      if (!videoCallProcessing && videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying && !videoCallMuted) {
         try {
           videoCallVadInstance.start();
           log(`VAD resumed after ${reason}`);
@@ -1115,6 +1178,15 @@ function resumeVideoCallListening(reason) {
 }
 
 async function sendVideoCallData(audioFloat32) {
+  const muteRevisionAtStart = videoCallMuteRevision;
+  if (videoCallMuted) {
+    log('Video call muted, dropping audio before send');
+    videoCallProcessing = false;
+    videoCallSpeaking = false;
+    updateVideoCallStatus('listening', 'Muted');
+    return;
+  }
+
   // Debounce to prevent duplicate sends
   const now = Date.now();
   if (now - lastVideoCallSendTime < VIDEO_CALL_DEBOUNCE_MS) {
@@ -1139,7 +1211,7 @@ async function sendVideoCallData(audioFloat32) {
       // Safety fallback: resume VAD after 30 seconds if TTS never comes
       // (e.g., server error, tool call without TTS response)
       setTimeout(() => {
-        if (videoCallProcessing && !isTtsPlaying && videoCallVadInstance && videoCallActive && !pttMode) {
+        if (videoCallProcessing && !isTtsPlaying && videoCallVadInstance && videoCallActive && !pttMode && !videoCallMuted) {
           videoCallProcessing = false;
           try {
             videoCallVadInstance.start();
@@ -1171,6 +1243,14 @@ async function sendVideoCallData(audioFloat32) {
     const reader = new FileReader();
     
     reader.onload = async () => {
+      if (videoCallMuted || muteRevisionAtStart !== videoCallMuteRevision) {
+        log('Video call muted before websocket send, dropping payload');
+        videoCallProcessing = false;
+        videoCallSpeaking = false;
+        updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : (pttMode ? 'Press SPACE or hold button to talk' : 'Listening...'));
+        return;
+      }
+
       const audioBase64 = reader.result.split(',')[1];
 
       if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) {
@@ -1206,13 +1286,48 @@ async function sendVideoCallData(audioFloat32) {
 
 function toggleVideoCallMute() {
   videoCallMuted = !videoCallMuted;
+  videoCallMuteRevision += 1;
   const btn = document.getElementById('videoCallMuteBtn');
   
   if (videoCallMuted) {
+    videoCallDropCurrentSpeech = true;
+    videoCallSpeaking = false;
+    videoCallProcessing = false;
+    pttDiscardCurrentRecording = true;
+    pttAudioChunks = [];
+    if (pttStream) {
+      pttStream.getAudioTracks().forEach(track => {
+        track.enabled = false;
+      });
+    }
+    if (pttMediaRecorder && pttMediaRecorder.state !== 'inactive') {
+      try {
+        pttMediaRecorder.stop();
+      } catch (e) {}
+    }
+    if (videoCallVadInstance) {
+      try {
+        videoCallVadInstance.pause();
+        log('Video VAD paused for mute');
+      } catch (e) {}
+    }
     btn.classList.add('muted');
     btn.textContent = '🔇';
     updateVideoCallStatus('listening', 'Muted');
   } else {
+    videoCallDropCurrentSpeech = false;
+    pttDiscardCurrentRecording = false;
+    if (pttStream) {
+      pttStream.getAudioTracks().forEach(track => {
+        track.enabled = true;
+      });
+    }
+    if (videoCallVadInstance && videoCallActive && !pttMode && !isTtsPlaying) {
+      try {
+        videoCallVadInstance.start();
+        log('Video VAD resumed after unmute');
+      } catch (e) {}
+    }
     btn.classList.remove('muted');
     btn.textContent = '🎤';
     // Show appropriate status based on input mode
@@ -1430,10 +1545,12 @@ function setInputMode(mode) {
       } catch (e) {}
     }
     
-    // Initialize PTT audio stream
-    initPttAudio();
-    
-    updateVideoCallStatus('listening', 'Press SPACE or hold button to talk');
+    // Initialize PTT audio stream only when the mic is available.
+    if (!videoCallMuted) {
+      initPttAudio();
+    }
+
+    updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : 'Press SPACE or hold button to talk');
     log('Switched to PTT mode');
   } else {
     pttMode = false;
@@ -1449,18 +1566,23 @@ function setInputMode(mode) {
     if (pttContainer) pttContainer.style.display = 'none';
     if (waveform) waveform.style.display = 'flex';
     
-    // Resume VAD when in VAD mode
+    // Resume VAD when in VAD mode and unmuted.
     if (videoCallVadInstance) {
       try {
-        videoCallVadInstance.start();
-        log('VAD resumed');
+        if (videoCallMuted) {
+          videoCallVadInstance.pause();
+          log('VAD kept paused because video call is muted');
+        } else {
+          videoCallVadInstance.start();
+          log('VAD resumed');
+        }
       } catch (e) {}
     }
     
     // Cleanup PTT audio
     cleanupPttAudio();
     
-    updateVideoCallStatus('listening', 'Listening...');
+    updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : 'Listening...');
     log('Switched to VAD mode');
   }
 }
@@ -1541,6 +1663,13 @@ async function startPttRecording(event) {
     if (!pttStream) {
       await initPttAudio();
     }
+    if (videoCallMuted) {
+      pttRecording = false;
+      pttDiscardCurrentRecording = true;
+      updateVideoCallStatus('listening', 'Muted');
+      return;
+    }
+    pttDiscardCurrentRecording = false;
     
     // Create MediaRecorder with WAV-compatible format
     const options = { mimeType: 'audio/webm;codecs=opus' };
@@ -1552,6 +1681,9 @@ async function startPttRecording(event) {
     pttMediaRecorder = new MediaRecorder(pttStream, options);
     
     pttMediaRecorder.ondataavailable = (e) => {
+      if (videoCallMuted || pttDiscardCurrentRecording) {
+        return;
+      }
       if (e.data.size > 0) {
         pttAudioChunks.push(e.data);
       }
@@ -1563,7 +1695,14 @@ async function startPttRecording(event) {
         log('PTT: Already processing, ignoring duplicate onstop');
         return;
       }
-      
+      if (videoCallMuted || pttDiscardCurrentRecording) {
+        log('PTT: Dropping recorded audio because video call is muted');
+        pttAudioChunks = [];
+        pttDiscardCurrentRecording = false;
+        updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : 'Press SPACE or hold button to talk');
+        return;
+      }
+
       if (pttAudioChunks.length === 0) {
         log('PTT: No audio recorded');
         return;
@@ -1626,6 +1765,12 @@ function stopPttRecording(event) {
 
 async function processPttAudio(audioBlob) {
   try {
+    if (videoCallMuted || pttDiscardCurrentRecording) {
+      log('PTT: Dropping audio before processing because video call is muted');
+      updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : 'Press SPACE or hold button to talk');
+      return;
+    }
+
     // Decode the webm audio to Float32Array
     const arrayBuffer = await audioBlob.arrayBuffer();
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -1654,6 +1799,12 @@ async function processPttAudio(audioBlob) {
     
     await audioContext.close();
     
+    if (videoCallMuted || pttDiscardCurrentRecording) {
+      log('PTT: Dropping audio after decode because video call is muted');
+      updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : 'Press SPACE or hold button to talk');
+      return;
+    }
+
     // Send using the existing video call data function
     sendVideoCallData(audioFloat32);
     
@@ -1742,7 +1893,7 @@ function stopTtsPlayback() {
   log('TTS playback stopped (barge-in complete)');
   
   // Resume VAD after barge-in (immediate since user is already speaking)
-  if (videoCallActive && videoCallVadInstance && !pttMode) {
+  if (videoCallActive && videoCallVadInstance && !pttMode && !videoCallMuted) {
     try {
       videoCallVadInstance.start();
       log('VAD resumed after barge-in');
@@ -3474,9 +3625,9 @@ async function handleMessage(data) {
         lastTtsEndTime = Date.now(); // Track when TTS finished for cooldown
         
         // RESUME VAD after TTS playback ends (with delay for cooldown)
-        if (videoCallActive && videoCallVadInstance && !pttMode) {
+        if (videoCallActive && videoCallVadInstance && !pttMode && !videoCallMuted) {
           setTimeout(() => {
-            if (!isTtsPlaying && videoCallVadInstance) {
+            if (!isTtsPlaying && videoCallVadInstance && !videoCallMuted) {
               try {
                 videoCallVadInstance.start();
                 log('VAD resumed after TTS playback');
@@ -3507,8 +3658,9 @@ async function handleMessage(data) {
       alert("Error: " + data.error);
       // Clear processing flag and resume VAD on error
       videoCallProcessing = false;
-      if (videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying) {
+      if (videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying && !videoCallMuted) {
         setTimeout(() => {
+          if (videoCallMuted) return;
           try {
             videoCallVadInstance.start();
             log('VAD resumed after error');
@@ -3638,9 +3790,9 @@ async function handleAudioChunk(data) {
         log('All audio sources finished playing');
         
         // RESUME VAD after TTS playback ends (with delay for cooldown)
-        if (videoCallActive && videoCallVadInstance && !pttMode) {
+        if (videoCallActive && videoCallVadInstance && !pttMode && !videoCallMuted) {
           setTimeout(() => {
-            if (!isTtsPlaying && videoCallVadInstance) {
+            if (!isTtsPlaying && videoCallVadInstance && !videoCallMuted) {
               try {
                 videoCallVadInstance.start();
                 log('VAD resumed after audio sources finished');

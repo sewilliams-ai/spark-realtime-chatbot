@@ -133,6 +133,7 @@ canonical overnight reference.
 | 10 | Add same-origin live preview routing so successful generated MVPs run behind the current Spark URL and completion messages include an openable link | completed |
 | 11 | Evaluate `workspace_update_assistant` spoken feedback strategy after manual Beat 3 testing exposed generic `On it.` for both team update and personal gift follow-up | completed |
 | 12 | Implement minimal personal-gift acknowledgement branch for `workspace_update_assistant` and add deterministic regression coverage | completed |
+| 13 | Trace and debug mute-toggle inconsistencies across voice-call VAD, video-call VAD, push-to-talk recording, and websocket audio send paths | completed |
 
 ## Workspace Update Follow-Up Recommendation - 2026-05-07
 
@@ -160,6 +161,25 @@ Implementation result: added a tiny personal-gift acknowledgement branch in
 team updates still speak `On it.`. Explicit pineapple-cakes/personal-souvenir
 follow-ups speak the fixed high-mountain-oolong suggestion before the existing
 workspace file update runs.
+
+## Mute Toggle Debug Plan - 2026-05-07
+
+Goal: find why browser mute state can diverge from whether audio reaches ASR.
+Keep the work small: inspect existing client audio paths, identify the exact
+state mismatch, add only minimal guards if needed, and avoid large frontend
+refactors. Current search shows three relevant send paths in `static/js/app.js`:
+voice-call VAD sends `asr_audio`, video-call VAD sends `video_call_data`, and
+video-call push-to-talk/media-recorder also sends `video_call_data`. The server
+does not receive an explicit mute state today, so correctness depends on the
+browser not sending audio when muted.
+
+Result: compared current `server.py` against known-good commit `9ed5710` and
+confirmed neither version implements server-side mute state. The server-side
+difference is handoff ownership gating, which can explain unmuted audio being
+ignored when a client is stale/handoff-pending but cannot explain muted audio
+being heard. The fix therefore stays in `static/js/app.js`: mute now pauses VAD,
+discards in-flight VAD/PTT audio, disables PTT audio tracks, and re-checks a
+mute revision immediately before websocket sends.
 
 ## Tests
 
