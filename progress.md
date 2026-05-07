@@ -185,6 +185,18 @@ bench/test_computex_workspace.py`, `.venv-gpu/bin/python
 bench/test_computex_workspace.py`, `node --check static/js/app.js`, and
 `git diff --check`.
 
+## Session 2026-05-07 - mobile audio pickup issue summary
+
+Used `planning-with-files` to preserve the current mobile ASR/VAD issue state.
+Summary added to `findings.md`: mobile stress tests showed missed prompts, but
+backend logs indicate failed turns never sent `video_call_data`, while
+successful turns transcribed quickly and accurately. Current diagnosis is
+frontend mobile capture/VAD state drift, with one concrete bug fixed in
+`4b05bec [fix] recover mobile vad sends`: dropped/error send paths could leave
+`videoCallProcessing` stuck true, and mobile VAD now gets a safe pause/start
+recovery plus telemetry so future missed utterances can be classified from
+server logs.
+
 ## Session 2026-05-07 - mute toggle investigation
 
 Started a scoped `planning-with-files` debug pass for inconsistent mute

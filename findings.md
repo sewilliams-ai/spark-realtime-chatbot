@@ -261,3 +261,33 @@ but it cannot explain "muted but still picked up" unless the browser still sent
 audio. Current server also filters recent assistant TTS echoes, which could
 make some captured audio appear ignored, but only when ASR text matches recent
 spoken assistant output.
+
+## Mobile Audio Pickup Issue Summary - 2026-05-07
+
+User stress testing on iPhone after laptop-to-mobile handoff showed spotty
+audio pickup: several spoken prompts produced no chat transcript and no model
+response, while mute/unmute sometimes recovered the phone mic path. Backend log
+review showed that successful mobile turns had normal `Received video_call_data`
+entries, WAV byte sizes, fast ASR decode, and accurate transcriptions. Failed
+turns had no corresponding `video_call_data` entry at all. Therefore the
+observed failure was not Whisper/faster-whisper transcription quality or ASR
+latency; the audio payload usually never reached the backend.
+
+The strongest current diagnosis is frontend capture/VAD state drift on mobile,
+especially after TTS playback, handoff resume, or dropped send paths. One real
+state bug was found: some `sendVideoCallData()` early-return/error paths could
+leave `videoCallProcessing` true, which would cause later VAD speech-end events
+to be ignored until a manual mute/unmute reset the browser state. Manual
+mute/unmute helping the issue supports the same theory: restarting/pausing the
+mobile VAD path can recover capture even when the websocket and backend ASR are
+healthy.
+
+Patch committed as `4b05bec [fix] recover mobile vad sends`. It keeps the fix
+local to `static/js/app.js` and a tiny `server.py` telemetry handler: mobile
+VAD now does a pause/start recovery after TTS and handoff, send/drop paths clear
+processing/speaking state consistently, muted/debounced/disconnected sends are
+logged, and mobile-only client events are sent to the server so the next missed
+utterance can be classified as VAD misfire, cooldown, energy gate, processing
+lock, websocket drop, or successful audio send. Follow-up manual testing should
+hard-refresh the phone tab and inspect `/tmp/spark-realtime-chatbot-8443.log`
+for `[Client Event] mobile ...` lines if audio is missed again.
