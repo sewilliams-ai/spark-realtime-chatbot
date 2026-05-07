@@ -206,6 +206,7 @@ let chats = {};  // Store all chats: { chatId: { id, title, preview, timestamp, 
 let handoffPromptEl = null;
 let modalHandoffOffer = null;
 let pendingModalHandoffResume = null;
+let handoffResumeInProgress = false;
 
 // Chat management functions
 function generateChatId() {
@@ -517,6 +518,9 @@ async function startHandoffFromModal() {
   renderChatList();
   loadChat(currentChatId);
 
+  pendingModalHandoffResume = offer;
+  handoffResumeInProgress = true;
+
   if (callMode === 'video') {
     await setupVideoCallMode();
     if (videoConversationEl) {
@@ -534,7 +538,6 @@ async function startHandoffFromModal() {
   }
 
   pendingSystemPrompt = systemPromptInput.value.trim();
-  pendingModalHandoffResume = offer;
   connectVoiceWebSocket();
   log(`Continuing handoff conversation: ${offer.conversation_id}`);
 }
@@ -654,10 +657,15 @@ async function setupVoiceCallMode() {
       }
     });
     
-    // Start VAD
-    vadInstance.start();
+    if (handoffResumeInProgress) {
+      vadInstance.pause();
+      updateVoiceCallStatus('listening', 'Connecting...');
+      log('Voice VAD paused while handoff resumes');
+    } else {
+      vadInstance.start();
+      updateVoiceCallStatus('listening', 'Listening...');
+    }
     voiceCallActive = true;
-    updateVoiceCallStatus('listening', 'Listening...');
     log('Voice Call mode active with VAD');
     
     // Start waveform animation
@@ -1091,8 +1099,14 @@ async function setupVideoCallMode() {
     
     // Only start VAD if not in PTT mode
     if (!pttMode) {
-      videoCallVadInstance.start();
-      updateVideoCallStatus('listening', 'Listening...');
+      if (handoffResumeInProgress) {
+        videoCallVadInstance.pause();
+        updateVideoCallStatus('listening', 'Connecting...');
+        log('Video VAD paused while handoff resumes');
+      } else {
+        videoCallVadInstance.start();
+        updateVideoCallStatus('listening', 'Listening...');
+      }
     } else {
       // In PTT mode, keep VAD paused
       videoCallVadInstance.pause();
@@ -1164,19 +1178,46 @@ function resumeVideoCallListening(reason, delayMs = 100) {
   videoCallProcessing = false;
   videoCallSpeaking = false;
 
+  if (handoffResumeInProgress) {
+    if (videoCallActive && !videoCallMuted) {
+      updateVideoCallStatus('listening', 'Connecting...');
+    }
+    return;
+  }
+
   if (videoCallActive && !videoCallMuted) {
     updateVideoCallStatus('listening', pttMode ? 'Press SPACE or hold button to talk' : 'Listening...');
   }
 
+  const canResumeVad = () => (
+    !videoCallProcessing &&
+    videoCallActive &&
+    videoCallVadInstance &&
+    !pttMode &&
+    !isTtsPlaying &&
+    !videoCallMuted
+  );
+
   if (videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying && !videoCallMuted) {
     setTimeout(() => {
-      if (!videoCallProcessing && videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying && !videoCallMuted) {
+      if (canResumeVad()) {
         try {
           videoCallVadInstance.start();
           log(`VAD resumed after ${reason}`);
         } catch (e) {}
       }
     }, delayMs);
+
+    if (getClientDeviceType() === 'mobile') {
+      setTimeout(() => {
+        if (canResumeVad()) {
+          try {
+            videoCallVadInstance.start();
+            log(`Mobile VAD resume retry after ${reason}`);
+          } catch (e) {}
+        }
+      }, delayMs + 900);
+    }
   }
 }
 
@@ -1190,7 +1231,7 @@ function finishTtsPlayback(reason, generation = ttsPlaybackGeneration) {
   if (voiceCallActive && !voiceCallMuted) {
     updateVoiceCallStatus('listening', 'Listening...');
   }
-  resumeVideoCallListening(reason, 500);
+  resumeVideoCallListening(reason, getClientDeviceType() === 'mobile' ? 150 : 500);
 }
 
 function scheduleTtsRecovery(reason, generation = ttsPlaybackGeneration) {
@@ -1226,6 +1267,14 @@ function scheduleTtsRecovery(reason, generation = ttsPlaybackGeneration) {
 
 async function sendVideoCallData(audioFloat32) {
   const muteRevisionAtStart = videoCallMuteRevision;
+  if (handoffResumeInProgress) {
+    log('Video call waiting for handoff resume, dropping pre-ready audio');
+    videoCallProcessing = false;
+    videoCallSpeaking = false;
+    updateVideoCallStatus('listening', 'Connecting...');
+    return;
+  }
+
   if (videoCallMuted) {
     log('Video call muted, dropping audio before send');
     videoCallProcessing = false;
@@ -2721,6 +2770,7 @@ function showTransferBackPrompt(data) {
 function handleHandoffResumed(data) {
   closeHandoffPrompt();
   hideThinkingIndicator();
+  handoffResumeInProgress = false;
   syncHandoffChatState(data);
   renderHandoffMessages(data.messages || []);
 
@@ -2728,13 +2778,30 @@ function handleHandoffResumed(data) {
     voiceSelect.value = data.voice;
   }
   updateHandoffToolState(data.enabled_tools);
-  if (voiceCallActive) updateVoiceCallStatus('listening', 'Listening...');
-  if (videoCallActive) updateVideoCallStatus('listening', pttMode ? 'Press SPACE or hold button to talk' : 'Listening...');
+  if (voiceCallActive) {
+    if (vadInstance && !voiceCallMuted) {
+      try {
+        vadInstance.start();
+        log('Voice VAD started after handoff resumed');
+      } catch (e) {}
+    }
+    updateVoiceCallStatus('listening', voiceCallMuted ? 'Muted' : 'Listening...');
+  }
+  if (videoCallActive) {
+    if (videoCallVadInstance && !pttMode && !videoCallMuted && !isTtsPlaying) {
+      try {
+        videoCallVadInstance.start();
+        log('Video VAD started after handoff resumed');
+      } catch (e) {}
+    }
+    updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : (pttMode ? 'Press SPACE or hold button to talk' : 'Listening...'));
+  }
   log(`Conversation handoff resumed: ${data.message_count || 0} messages`);
 }
 
 function handleHandoffTransferred(data) {
   hideThinkingIndicator();
+  handoffResumeInProgress = false;
   saveCurrentChat();
   stopTtsPlayback();
   teardownVoiceCallMode();
@@ -2753,6 +2820,7 @@ function handleHandoffTransferred(data) {
 
 function handleSessionReplaced(data) {
   hideThinkingIndicator();
+  handoffResumeInProgress = false;
   saveCurrentChat();
   stopTtsPlayback();
   teardownVoiceCallMode();
