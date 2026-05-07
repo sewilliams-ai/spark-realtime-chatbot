@@ -1157,7 +1157,7 @@ function updateVideoCallStatus(state, text) {
   }
 }
 
-function resumeVideoCallListening(reason) {
+function resumeVideoCallListening(reason, delayMs = 100) {
   videoCallProcessing = false;
   videoCallSpeaking = false;
 
@@ -1173,8 +1173,42 @@ function resumeVideoCallListening(reason) {
           log(`VAD resumed after ${reason}`);
         } catch (e) {}
       }
-    }, 100);
+    }, delayMs);
   }
+}
+
+function finishTtsPlayback(reason) {
+  isTtsPlaying = false;
+  videoCallProcessing = false;
+  lastTtsEndTime = Date.now();
+
+  if (voiceCallActive && !voiceCallMuted) {
+    updateVoiceCallStatus('listening', 'Listening...');
+  }
+  resumeVideoCallListening(reason, 500);
+}
+
+function scheduleTtsRecovery(reason) {
+  if (!audioContext || nextPlayTime === null) return;
+
+  const remainingMs = Math.max(0, (nextPlayTime - audioContext.currentTime) * 1000);
+  const recoveryDelayMs = Math.max(1000, remainingMs + 750);
+
+  setTimeout(() => {
+    if (!isTtsPlaying || activeAudioSources.length === 0) return;
+
+    log(`TTS playback recovery after ${reason}; clearing ${activeAudioSources.length} stale source(s)`);
+    activeAudioSources.forEach(source => {
+      try {
+        source.stop();
+      } catch (e) {}
+      try {
+        source.disconnect();
+      } catch (e) {}
+    });
+    activeAudioSources = [];
+    finishTtsPlayback(`${reason} recovery`);
+  }, recoveryDelayMs);
 }
 
 async function sendVideoCallData(audioFloat32) {
@@ -3620,36 +3654,10 @@ async function handleMessage(data) {
       // Only set isTtsPlaying=false if no audio sources are still playing
       // Otherwise, the source.onended handler will set it to false
       if (activeAudioSources.length === 0) {
-        isTtsPlaying = false;
-        videoCallProcessing = false; // Clear processing flag
-        lastTtsEndTime = Date.now(); // Track when TTS finished for cooldown
-        
-        // RESUME VAD after TTS playback ends (with delay for cooldown)
-        if (videoCallActive && videoCallVadInstance && !pttMode && !videoCallMuted) {
-          setTimeout(() => {
-            if (!isTtsPlaying && videoCallVadInstance && !videoCallMuted) {
-              try {
-                videoCallVadInstance.start();
-                log('VAD resumed after TTS playback');
-              } catch (e) {}
-            }
-          }, 500); // 500ms delay before resuming VAD
-        }
-        
-        // Update voice/video call status - back to listening
-        if (voiceCallActive && !voiceCallMuted) {
-          updateVoiceCallStatus('listening', 'Listening...');
-        }
-        if (videoCallActive && !videoCallMuted) {
-          // Show appropriate status based on input mode
-          if (pttMode) {
-            updateVideoCallStatus('listening', 'Press SPACE or hold button to talk');
-          } else {
-            updateVideoCallStatus('listening', 'Listening...');
-          }
-        }
+        finishTtsPlayback('TTS playback');
       } else {
         log(`Audio still playing (${activeAudioSources.length} sources), keeping isTtsPlaying=true`);
+        scheduleTtsRecovery('tts_done');
       }
       break;
 
@@ -3784,22 +3792,8 @@ async function handleAudioChunk(data) {
       
       // When last audio source ends, TTS is truly done playing
       if (activeAudioSources.length === 0) {
-        isTtsPlaying = false;
-        videoCallProcessing = false; // Clear processing flag
-        lastTtsEndTime = Date.now(); // Track when TTS finished for cooldown
         log('All audio sources finished playing');
-        
-        // RESUME VAD after TTS playback ends (with delay for cooldown)
-        if (videoCallActive && videoCallVadInstance && !pttMode && !videoCallMuted) {
-          setTimeout(() => {
-            if (!isTtsPlaying && videoCallVadInstance && !videoCallMuted) {
-              try {
-                videoCallVadInstance.start();
-                log('VAD resumed after audio sources finished');
-              } catch (e) {}
-            }
-          }, 500); // 500ms delay before resuming VAD
-        }
+        finishTtsPlayback('audio sources finished');
       }
     };
     
