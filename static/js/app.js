@@ -239,6 +239,18 @@ function getDeviceLabel(device) {
   return device === 'mobile' ? 'phone' : 'laptop';
 }
 
+function sendClientEvent(event, details = {}) {
+  if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) return;
+  try {
+    voiceWs.send(JSON.stringify({ type: 'client_event', event, details }));
+  } catch (e) {}
+}
+
+function sendMobileAudioEvent(event, details = {}) {
+  if (getClientDeviceType() !== 'mobile') return;
+  sendClientEvent(event, details);
+}
+
 async function fetchHandoffStatus() {
   const params = new URLSearchParams({ device: getClientDeviceType() });
   try {
@@ -992,6 +1004,7 @@ async function setupVideoCallMode() {
       
       onSpeechStart: () => {
         if (videoCallMuted) {
+          sendMobileAudioEvent('video_vad_drop_start_muted');
           videoCallDropCurrentSpeech = true;
           videoCallSpeaking = false;
           return;
@@ -1004,10 +1017,19 @@ async function setupVideoCallMode() {
         }
         
         log(`Video VAD: Speech started (isTtsPlaying: ${isTtsPlaying}, bargeInEnabled: ${bargeInEnabled}, processing: ${videoCallProcessing})`);
+        sendMobileAudioEvent('video_vad_speech_start', {
+          tts: isTtsPlaying,
+          processing: videoCallProcessing,
+          muted: videoCallMuted
+        });
         
         // Don't update UI if we're going to ignore this speech anyway
         if (videoCallProcessing || (isTtsPlaying && !bargeInEnabled)) {
           log('Video VAD: Speech will be ignored, not updating UI');
+          sendMobileAudioEvent('video_vad_drop_start_busy', {
+            tts: isTtsPlaying,
+            processing: videoCallProcessing
+          });
           return;
         }
         
@@ -1030,6 +1052,10 @@ async function setupVideoCallMode() {
       onSpeechEnd: (audio) => {
         if (videoCallMuted || videoCallDropCurrentSpeech) {
           log('Video VAD: Dropping speech because video call is muted');
+          sendMobileAudioEvent('video_vad_drop_end_muted', {
+            muted: videoCallMuted,
+            dropCurrent: videoCallDropCurrentSpeech
+          });
           videoCallSpeaking = false;
           videoCallDropCurrentSpeech = false;
           updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : (pttMode ? 'Press SPACE or hold button to talk' : 'Listening...'));
@@ -1043,18 +1069,23 @@ async function setupVideoCallMode() {
         // Ignore VAD in PTT mode (safety check)
         if (pttMode) {
           log('Video VAD: Ignoring speech end - PTT mode active');
+          videoCallSpeaking = false;
           return;
         }
 
         // Don't process if already processing a request
         if (videoCallProcessing) {
           log('Video VAD: Ignoring speech - still processing previous request');
+          sendMobileAudioEvent('video_vad_drop_processing');
+          videoCallSpeaking = false;
           return;
         }
 
         // Don't process if TTS is playing
         if (isTtsPlaying) {
           log('Video VAD: Ignoring speech end during TTS playback');
+          sendMobileAudioEvent('video_vad_drop_tts');
+          videoCallSpeaking = false;
           return;
         }
 
@@ -1063,23 +1094,37 @@ async function setupVideoCallMode() {
         // Post-TTS cooldown - wait before accepting new speech after a response
         if (lastTtsEndTime > 0 && now - lastTtsEndTime < POST_TTS_COOLDOWN_MS) {
           log(`Video VAD: Post-TTS cooldown (${POST_TTS_COOLDOWN_MS - (now - lastTtsEndTime)}ms remaining)`);
+          sendMobileAudioEvent('video_vad_drop_cooldown', {
+            remainingMs: POST_TTS_COOLDOWN_MS - (now - lastTtsEndTime)
+          });
+          videoCallSpeaking = false;
           return;
         }
 
         // Debounce to prevent duplicate sends
         if (now - lastVideoCallSendTime < VIDEO_CALL_DEBOUNCE_MS) {
           log('Video VAD: Debounced duplicate speech end');
+          sendMobileAudioEvent('video_vad_drop_debounce');
+          videoCallSpeaking = false;
           return;
         }
 
         // Energy gate - reject low-energy audio (noise)
         if (energy < energyThreshold) {
           log(`Video VAD: Rejected by energy gate (RMS=${energy.toFixed(4)}, threshold=${energyThreshold})`);
+          sendMobileAudioEvent('video_vad_drop_energy', {
+            rms: Number(energy.toFixed(4)),
+            threshold: energyThreshold
+          });
           videoCallSpeaking = false;
           updateVideoCallStatus('listening', 'Listening...');
           return;
         }
         log(`Video VAD: Energy gate passed (RMS=${energy.toFixed(4)})`);
+        sendMobileAudioEvent('video_vad_send_attempt', {
+          rms: Number(energy.toFixed(4)),
+          samples: audio ? audio.length : 0
+        });
 
         log('Video VAD: Speech ended, capturing frame + audio...');
         videoCallSpeaking = false;
@@ -1091,6 +1136,7 @@ async function setupVideoCallMode() {
       },
       
       onVADMisfire: () => {
+        sendMobileAudioEvent('video_vad_misfire');
         if (!videoCallSpeaking) {
           updateVideoCallStatus('listening', 'Listening...');
         }
@@ -1174,6 +1220,42 @@ function updateVideoCallStatus(state, text) {
   }
 }
 
+function canResumeVideoVad() {
+  return (
+    !handoffResumeInProgress &&
+    !videoCallProcessing &&
+    videoCallActive &&
+    videoCallVadInstance &&
+    !pttMode &&
+    !isTtsPlaying &&
+    !videoCallMuted
+  );
+}
+
+function startVideoVad(reason) {
+  if (!canResumeVideoVad()) return;
+  try {
+    videoCallVadInstance.start();
+    log(`VAD resumed after ${reason}`);
+    sendMobileAudioEvent('video_vad_start', { reason });
+  } catch (e) {
+    log(`VAD resume failed after ${reason}: ${e.message}`);
+    sendMobileAudioEvent('video_vad_start_error', { reason, error: e.message });
+  }
+}
+
+function restartVideoVad(reason, delayMs = 100) {
+  if (!canResumeVideoVad()) return;
+  try {
+    videoCallVadInstance.pause();
+    log(`VAD restarting after ${reason}`);
+    sendMobileAudioEvent('video_vad_restart', { reason });
+  } catch (e) {
+    log(`VAD pause before restart failed after ${reason}: ${e.message}`);
+  }
+  setTimeout(() => startVideoVad(`${reason} restart`), delayMs);
+}
+
 function resumeVideoCallListening(reason, delayMs = 100) {
   videoCallProcessing = false;
   videoCallSpeaking = false;
@@ -1189,36 +1271,15 @@ function resumeVideoCallListening(reason, delayMs = 100) {
     updateVideoCallStatus('listening', pttMode ? 'Press SPACE or hold button to talk' : 'Listening...');
   }
 
-  const canResumeVad = () => (
-    !videoCallProcessing &&
-    videoCallActive &&
-    videoCallVadInstance &&
-    !pttMode &&
-    !isTtsPlaying &&
-    !videoCallMuted
-  );
+  if (!canResumeVideoVad()) return;
 
-  if (videoCallActive && videoCallVadInstance && !pttMode && !isTtsPlaying && !videoCallMuted) {
-    setTimeout(() => {
-      if (canResumeVad()) {
-        try {
-          videoCallVadInstance.start();
-          log(`VAD resumed after ${reason}`);
-        } catch (e) {}
-      }
-    }, delayMs);
-
-    if (getClientDeviceType() === 'mobile') {
-      setTimeout(() => {
-        if (canResumeVad()) {
-          try {
-            videoCallVadInstance.start();
-            log(`Mobile VAD resume retry after ${reason}`);
-          } catch (e) {}
-        }
-      }, delayMs + 900);
-    }
+  if (getClientDeviceType() === 'mobile') {
+    restartVideoVad(reason, delayMs);
+    setTimeout(() => startVideoVad(`${reason} retry`), delayMs + 900);
+    return;
   }
+
+  setTimeout(() => startVideoVad(reason), delayMs);
 }
 
 function finishTtsPlayback(reason, generation = ttsPlaybackGeneration) {
@@ -1269,6 +1330,7 @@ async function sendVideoCallData(audioFloat32) {
   const muteRevisionAtStart = videoCallMuteRevision;
   if (handoffResumeInProgress) {
     log('Video call waiting for handoff resume, dropping pre-ready audio');
+    sendMobileAudioEvent('video_send_drop_handoff');
     videoCallProcessing = false;
     videoCallSpeaking = false;
     updateVideoCallStatus('listening', 'Connecting...');
@@ -1277,6 +1339,7 @@ async function sendVideoCallData(audioFloat32) {
 
   if (videoCallMuted) {
     log('Video call muted, dropping audio before send');
+    sendMobileAudioEvent('video_send_drop_muted');
     videoCallProcessing = false;
     videoCallSpeaking = false;
     updateVideoCallStatus('listening', 'Muted');
@@ -1287,12 +1350,17 @@ async function sendVideoCallData(audioFloat32) {
   const now = Date.now();
   if (now - lastVideoCallSendTime < VIDEO_CALL_DEBOUNCE_MS) {
     log('Video call: Debounced duplicate send');
+    sendMobileAudioEvent('video_send_drop_debounce');
+    videoCallProcessing = false;
+    videoCallSpeaking = false;
+    updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : (pttMode ? 'Press SPACE or hold button to talk' : 'Listening...'));
     return;
   }
   lastVideoCallSendTime = now;
   
   if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) {
     log('WebSocket not connected');
+    sendMobileAudioEvent('video_send_drop_ws_missing');
     updateVideoCallStatus('listening', 'Not connected');
     resumeVideoCallListening('missing WebSocket');
     return;
@@ -1309,11 +1377,8 @@ async function sendVideoCallData(audioFloat32) {
       setTimeout(() => {
         if (videoCallProcessing && !isTtsPlaying && videoCallVadInstance && videoCallActive && !pttMode && !videoCallMuted) {
           videoCallProcessing = false;
-          try {
-            videoCallVadInstance.start();
-            log('VAD resumed (safety fallback after 30s)');
-            updateVideoCallStatus('listening', 'Listening...');
-          } catch (e) {}
+          startVideoVad('safety fallback after 30s');
+          updateVideoCallStatus('listening', 'Listening...');
         }
       }, 30000);
     } catch (e) {}
@@ -1341,6 +1406,7 @@ async function sendVideoCallData(audioFloat32) {
     reader.onload = async () => {
       if (videoCallMuted || muteRevisionAtStart !== videoCallMuteRevision) {
         log('Video call muted before websocket send, dropping payload');
+        sendMobileAudioEvent('video_send_drop_muted_before_ws');
         videoCallProcessing = false;
         videoCallSpeaking = false;
         updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : (pttMode ? 'Press SPACE or hold button to talk' : 'Listening...'));
@@ -1351,6 +1417,7 @@ async function sendVideoCallData(audioFloat32) {
 
       if (!voiceWs || voiceWs.readyState !== WebSocket.OPEN) {
         log('WebSocket disconnected before video call payload send');
+        sendMobileAudioEvent('video_send_drop_ws_disconnected');
         resumeVideoCallListening('disconnected WebSocket');
         return;
       }
@@ -1371,12 +1438,25 @@ async function sendVideoCallData(audioFloat32) {
       
       voiceWs.send(JSON.stringify(payload));
       log('Sent video call data (audio + frame)');
+      sendMobileAudioEvent('video_audio_sent', {
+        bytes: wavBlob.size,
+        hasImage: Boolean(imageBase64)
+      });
+    };
+    reader.onerror = () => {
+      log('Video call file reader error');
+      sendMobileAudioEvent('video_send_file_reader_error');
+      resumeVideoCallListening('file reader error');
     };
     reader.readAsDataURL(wavBlob);
     
   } catch (error) {
     log(`Video call send error: ${error.message}`);
+    sendMobileAudioEvent('video_send_error', { error: error.message });
+    videoCallProcessing = false;
+    videoCallSpeaking = false;
     updateVideoCallStatus('listening', 'Error');
+    resumeVideoCallListening('send error');
   }
 }
 
@@ -1419,10 +1499,7 @@ function toggleVideoCallMute() {
       });
     }
     if (videoCallVadInstance && videoCallActive && !pttMode && !isTtsPlaying) {
-      try {
-        videoCallVadInstance.start();
-        log('Video VAD resumed after unmute');
-      } catch (e) {}
+      restartVideoVad('unmute', 0);
     }
     btn.classList.remove('muted');
     btn.textContent = '🎤';
@@ -2789,10 +2866,7 @@ function handleHandoffResumed(data) {
   }
   if (videoCallActive) {
     if (videoCallVadInstance && !pttMode && !videoCallMuted && !isTtsPlaying) {
-      try {
-        videoCallVadInstance.start();
-        log('Video VAD started after handoff resumed');
-      } catch (e) {}
+      restartVideoVad('handoff resumed', getClientDeviceType() === 'mobile' ? 150 : 0);
     }
     updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : (pttMode ? 'Press SPACE or hold button to talk' : 'Listening...'));
   }

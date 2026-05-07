@@ -3805,6 +3805,7 @@ async def voice_call(websocket: WebSocket):
 
                     pre_handoff_messages = {
                         "ping",
+                        "client_event",
                         "resume_handoff",
                         "decline_handoff",
                         "set_voice",
@@ -3844,6 +3845,15 @@ async def voice_call(websocket: WebSocket):
                     elif msg_type == "ping":
                         # Keep-alive ping
                         await session.send_message("pong")
+
+                    elif msg_type == "client_event":
+                        event = str(data.get("event", ""))[:80]
+                        details = data.get("details") if isinstance(data.get("details"), dict) else {}
+                        try:
+                            details_text = json.dumps(details, sort_keys=True)[:300]
+                        except Exception:
+                            details_text = str(details)[:300]
+                        print(f"[Client Event] {session.device_type} {session.conversation_id}: {event} {details_text}")
 
                     elif msg_type == "resume_handoff":
                         source_conversation_id = data.get("conversation_id") or session.conversation_id
