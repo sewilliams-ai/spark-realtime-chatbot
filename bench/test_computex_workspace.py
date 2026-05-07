@@ -178,7 +178,7 @@ ignored
         assert not session.is_camera_check_request("Please turn the camera")
         session.conversation_history = [
             {"role": "user", "content": "Please send an update to my team saying the strategic partnership is on track."},
-            {"role": "assistant", "content": "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"},
+            {"role": "assistant", "content": "On it."},
         ]
         session._workspace_update_started_at = 1.0
         assert session.is_workspace_update_request("and Q3 of 2026.")
@@ -195,6 +195,12 @@ ignored
         for name in team_names:
             assert any(name in item for item in todos), todos
         assert any("oolong" in item.lower() for item in todos), todos
+        field_partner_request = (
+            "Send an email update to my team that dinner with the field partners went well, "
+            "they liked the privacy story, and they asked for another hackathon in Taipei next year."
+        )
+        field_partner_todos = session.extract_workspace_todos("Update my team", field_partner_request, [])
+        assert not any("oolong" in item.lower() or "pineapple" in item.lower() for item in field_partner_todos), field_partner_todos
         string_items = session.extract_workspace_todos(
             "Draft update",
             "Dinner was strong.",
@@ -285,7 +291,8 @@ ignored
         routed_types = [msg_type for msg_type, _ in sent]
         assert routed_types.count("final_response") == 1, routed_types
         assert "workspace_update_complete" in routed_types, routed_types
-        assert any("Drafting the email now" in data.get("text", "") for msg_type, data in sent if msg_type == "final_response")
+        assert any(data.get("text", "") == "On it." for msg_type, data in sent if msg_type == "final_response")
+        assert not any("pineapple cakes last year" in data.get("text", "") for msg_type, data in sent if msg_type == "final_response")
         assert not any("Done. I drafted" in data.get("text", "") for msg_type, data in sent if msg_type == "final_response")
         assert not any("Done. I drafted" in data.get("text", "") for msg_type, data in sent if msg_type == "tts")
         assistant_turns = [msg for msg in session.conversation_history if msg.get("role") == "assistant"]

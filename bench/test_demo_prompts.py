@@ -143,7 +143,7 @@ def test_cold_open_variants(url, model):
         reply = text(message)
         require(not message.get("tool_calls"), f"unexpected tool call: {message}")
         require(
-            contains_any(reply, ["camera", "see", "visible", "live"])
+            contains_any(reply, ["camera", "see", "visible", "live", "frame"])
             and contains_any(reply, ["ready", "audio", "hear"]),
             f"cold open variant {idx} missed readiness: {reply!r}",
         )

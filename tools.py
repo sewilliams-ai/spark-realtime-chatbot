@@ -408,7 +408,7 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
                     "items": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional extracted action items or personal todos. Preserve personal souvenir, husband, partner, pineapple-cake, or gift todos as separate items."
+                        "description": "Optional extracted action items or personal todos. Preserve personal souvenir, husband, significant-other, romantic-partner, pineapple-cake, or gift todos as separate items. Do not treat business, field, or hardware partners as personal gift context."
                     }
                 },
                 "required": ["task"],

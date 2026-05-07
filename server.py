@@ -1459,7 +1459,7 @@ class VoiceSession:
                                         feedback_msg = "Let me think through this..."
                                         break
                                     if tc.get("function", {}).get("name") == "workspace_update_assistant":
-                                        feedback_msg = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
+                                        feedback_msg = "On it."
                                         break
                                     if tc.get("function", {}).get("name") == "html_assistant":
                                         feedback_msg = "On it. I'll build the prototype."
@@ -2707,7 +2707,7 @@ const mobilePath = {json.dumps(str(mobile_path))};
                 if item not in raw_items:
                     raw_items.append(item)
 
-        if any(term in source_lower for term in ("pineapple", "souvenir", "husband", "partner")):
+        if any(term in source_lower for term in ("pineapple", "souvenir", "husband", "significant other", "spouse", "gift", "oolong")):
             gift = "Buy high mountain oolong tea for husband"
             if gift not in raw_items:
                 raw_items.append(gift)
@@ -2927,7 +2927,6 @@ const mobilePath = {json.dumps(str(mobile_path))};
             "pineapple",
             "souvenir",
             "husband",
-            "partner",
             "personal todo",
             "personal to-do",
             "team",
@@ -3091,7 +3090,7 @@ const mobilePath = {json.dumps(str(mobile_path))};
     async def handle_workspace_update_request(self, user_text: str, items: list = None):
         """Deterministically execute the Computex team-update/personal-todo beat."""
         self._workspace_update_started_at = time.time()
-        ack = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
+        ack = "On it."
         await self.send_transient_ack(ack)
         self.conversation_history.append({"role": "assistant", "content": ack})
         self.publish_handoff_state()
@@ -4211,7 +4210,7 @@ async def voice_call(websocket: WebSocket):
                                                 "workspace_update_assistant",
                                             ):
                                                 if tool_name == "workspace_update_assistant":
-                                                    ack = "Drafting the email now. You got him pineapple cakes last year; maybe try high mountain oolong tea?"
+                                                    ack = "On it."
                                                 elif tool_name == "codebase_assistant":
                                                     ack = "On it."
                                                 else:
