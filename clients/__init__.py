@@ -1,5 +1,6 @@
 """Client modules for external services."""
 
+from . import whoop
 from .http_session import HTTPSessionManager
 from .asr import FasterWhisperASR, LocalWhisperASR, create_asr
 from .llm import LlamaCppClient, ReasoningClient
@@ -21,4 +22,5 @@ __all__ = [
     "KokoroTTS",
     "ChatterboxTTS",
     "create_tts",
+    "whoop",
 ]

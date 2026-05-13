@@ -40,6 +40,7 @@ from clients import (
     VLMClient,
     ReasoningClient,
     create_tts,
+    whoop,
 )
 from clients.http_session import set_http_manager
 
@@ -536,18 +537,13 @@ async def handoff_status(request: Request):
 _WHOOP_OAUTH_STATES: set[str] = set()
 
 if os.environ.get("WHOOP_CLIENT_ID") and os.environ.get("WHOOP_CLIENT_SECRET"):
-    from clients.whoop import auth_url as whoop_auth_url
-    from clients.whoop import exchange_code as whoop_exchange_code
-    from clients.whoop import fetch_all as whoop_fetch_all
-    from clients.whoop import write_auth_tokens as whoop_write_auth_tokens
-    from clients.whoop import write_to_health_yaml as whoop_write_to_health_yaml
 
     @app.get("/whoop/login")
     async def whoop_login():
         """Start WHOOP OAuth for the local demo cache."""
         state = secrets.token_hex(4)
         _WHOOP_OAUTH_STATES.add(state)
-        return RedirectResponse(whoop_auth_url(state), status_code=302)
+        return RedirectResponse(whoop.auth_url(state), status_code=302)
 
     @app.get("/whoop/callback", response_class=HTMLResponse)
     async def whoop_callback(request: Request):
@@ -566,10 +562,10 @@ if os.environ.get("WHOOP_CLIENT_ID") and os.environ.get("WHOOP_CLIENT_SECRET"):
             return HTMLResponse("<h1>WHOOP authorization failed</h1><p>Missing authorization code.</p>", status_code=400)
 
         try:
-            tokens = await whoop_exchange_code(code)
-            token_path = whoop_write_auth_tokens(tokens)
-            whoop_data = await whoop_fetch_all(tokens.get("access_token"))
-            health_path = whoop_write_to_health_yaml(whoop_data)
+            tokens = await whoop.exchange_code(code)
+            token_path = whoop.write_auth_tokens(tokens)
+            whoop_data = await whoop.fetch_all(tokens.get("access_token"))
+            health_path = whoop.write_to_health_yaml(whoop_data)
         except Exception as exc:
             print(f"[WHOOP] OAuth callback failed: {exc}")
             return HTMLResponse("<h1>WHOOP connection failed</h1><p>Check server logs for details.</p>", status_code=500)
