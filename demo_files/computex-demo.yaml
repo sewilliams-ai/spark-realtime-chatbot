@@ -10,13 +10,15 @@ relationship_memory:
 team_email: team@spark-demo.local
 
 team:
-  - name: Avery
-    role: hardware partnerships
-  - name: Morgan
-    role: product strategy
-  - name: Riley
-    role: engineering lead
+  - name: Sridhar
+    role: manager
+  - name: Kedar
+    role: technical lead
+  - name: Ayesha
+    role: hackathons coordinator
+  - name: Piyush
+    role: spark marketing lead
 
 dinner_context:
   default_meeting: strategic alignment dinner with hardware partners
-  default_action_theme: prioritize the partner-facing MVP path
+  default_action_theme: prioritize the privacy story and commit to local hackathons
