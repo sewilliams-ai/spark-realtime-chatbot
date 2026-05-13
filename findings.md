@@ -291,3 +291,100 @@ utterance can be classified as VAD misfire, cooldown, energy gate, processing
 lock, websocket drop, or successful audio send. Follow-up manual testing should
 hard-refresh the phone tab and inspect `/tmp/spark-realtime-chatbot-8443.log`
 for `[Client Event] mobile ...` lines if audio is missed again.
+
+## Mobile Audio Root-Cause Audit (Claude review) - 2026-05-07
+
+User asked Claude to audit the codebase ASR/VAD logic and report root-cause
+hypotheses, given suspicion that recent codex-driven fixes are layering instead
+of fixing. Reviewed all `videoCallProcessing` set/clear sites, the
+`canResumeVideoVad()` gate, `restartVideoVad()` / `startVideoVad()` /
+`resumeVideoCallListening()` recovery shapes, and the handoff resume flow.
+
+The recent commit history is itself a smell: 8 "fix" commits in ~24 hours
+(`c0aab7c`, `fc7b689`, `1877a56`, `65d5ca1`, `560d7b8`, `ef83723`,
+`4b05bec`, `4aa0a5a`) each adding more state guards, retries, telemetry, and
+recovery paths to the same surface (`static/js/app.js`) without converging.
+This pattern is consistent with codex layering symptom-fixes around a missing
+root cause.
+
+### Primary hypothesis: handoff resume path lacks the mobile dual-restart retry
+
+`canResumeVideoVad()` (`static/js/app.js:1223-1233`) gates on seven booleans:
+`!handoffResumeInProgress`, `!videoCallProcessing`, `videoCallActive`,
+`videoCallVadInstance`, `!pttMode`, `!isTtsPlaying`, `!videoCallMuted`. Both
+`startVideoVad()` (1235) and `restartVideoVad()` (1247) return silently if any
+gate is false — there is no error, no retry, and no telemetry indicating the
+silent failure beyond a missing `video_vad_start` event.
+
+The mobile recovery patch in 4b05bec recognized this fragility and added a
+double-restart pattern in `resumeVideoCallListening()` at lines 1276-1279:
+
+```
+if (getClientDeviceType() === 'mobile') {
+  restartVideoVad(reason, delayMs);
+  setTimeout(() => startVideoVad(`${reason} retry`), delayMs + 900);
+  return;
+}
+```
+
+But `handleHandoffResumed()` at `static/js/app.js:2847-2874` was only partially
+updated. After clearing `handoffResumeInProgress`, it calls a single
+`restartVideoVad('handoff resumed', 150)` (line 2869) without the 900ms retry.
+If any gate is still false 150ms later (most importantly `!videoCallProcessing`
+or `!isTtsPlaying`), the scheduled `startVideoVad` no-ops and VAD stays paused
+indefinitely until the user taps mute.
+
+Why this is probabilistic: `restartVideoVad` calls `pause()` immediately and
+then schedules `start()` after 150ms. Whether the start succeeds depends on
+the live state of seven flags 150ms in the future. On mobile, the iOS
+AudioWorklet/MicVAD start path has more variance than desktop, so the
+sometimes-works/sometimes-doesn't pattern fits.
+
+### Secondary hypothesis: `videoCallProcessing` carries across handoff
+
+`videoCallProcessing` is set true at exactly one place (`onSpeechEnd`, line
+1131) and cleared at 12 different sites. None of those sites are
+`handleHandoffResumed()`, `setupVideoCallMode()`, or `connectVoiceWebSocket()`.
+For a fresh tab the module-level initializer (line 933) is sufficient. But for
+a tab that previously held an in-flight call before handoff (e.g., back-and-
+forth handoffs in the same demo run, or a reload during a request), a stale
+`videoCallProcessing = true` will make `canResumeVideoVad()` fail at line 1226,
+silently blocking VAD restart from the handoff path. The 30-second safety
+fallback at lines 1378-1383 only fires if VAD was already paused via
+`sendVideoCallData`, not via the handoff initial pause path.
+
+### Tertiary hypothesis: success path never clears `videoCallProcessing`
+
+The successful `voiceWs.send` path inside the `reader.onload` callback (line
+1439) does not set `videoCallProcessing = false`. The flag is cleared only
+implicitly by later server-driven handlers (`tts_done` →
+`finishTtsPlayback` → line 1289, or `error` → line 3828, or the 30s safety
+timer). If the server takes a tool path that does not produce TTS, or a
+race causes the response messages to arrive in unexpected order, the flag
+can leak true and the next `onSpeechEnd` short-circuits at line 1077.
+
+### Why mute/unmute fixes it
+
+`toggleVideoCallMute()` mute branch (lines 1468-1492) clears
+`videoCallProcessing = false`, sets `videoCallDropCurrentSpeech = true`,
+pauses VAD. Unmute branch (lines 1493-1512) re-enables PTT tracks, clears
+the drop flag, and calls `restartVideoVad('unmute', 0)`. By the time the
+user has toggled, every gate in `canResumeVideoVad()` is back to a known
+good value, so VAD genuinely starts.
+
+### Recommended minimum fix
+
+Make the handoff resume path use the same dual-restart pattern that
+`resumeVideoCallListening` uses on mobile, and proactively clear
+`videoCallProcessing` and `videoCallSpeaking` inside `handleHandoffResumed`
+before that restart — analogous to `resumeVideoCallListening` line 1260-1261.
+That keeps the change tiny, mirrors the existing mobile recovery shape, and
+addresses both the "first utterance after handoff is dropped" symptom and the
+"stale processing flag carries across handoff" failure mode.
+
+Optional follow-up worth measuring with the existing
+`sendMobileAudioEvent` telemetry: when the bug reproduces, the server log
+should show a `video_vad_start_error` (rare) or — far more likely — no
+`video_vad_start` event at all between `handoff_resumed` arrival and the next
+mute toggle. Absence of `video_vad_start` is the smoking gun for the silent
+gate-failure hypothesis above.

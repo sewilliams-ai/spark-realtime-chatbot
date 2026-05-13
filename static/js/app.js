@@ -2848,6 +2848,11 @@ function handleHandoffResumed(data) {
   closeHandoffPrompt();
   hideThinkingIndicator();
   handoffResumeInProgress = false;
+  // Clear stale processing/speaking carried across handoff so canResumeVideoVad()
+  // doesn't silently no-op the VAD restart below.
+  videoCallProcessing = false;
+  videoCallSpeaking = false;
+  videoCallDropCurrentSpeech = false;
   syncHandoffChatState(data);
   renderHandoffMessages(data.messages || []);
 
@@ -2866,7 +2871,12 @@ function handleHandoffResumed(data) {
   }
   if (videoCallActive) {
     if (videoCallVadInstance && !pttMode && !videoCallMuted && !isTtsPlaying) {
-      restartVideoVad('handoff resumed', getClientDeviceType() === 'mobile' ? 150 : 0);
+      const isMobile = getClientDeviceType() === 'mobile';
+      const delayMs = isMobile ? 150 : 0;
+      restartVideoVad('handoff resumed', delayMs);
+      if (isMobile) {
+        setTimeout(() => startVideoVad('handoff resumed retry'), delayMs + 900);
+      }
     }
     updateVideoCallStatus('listening', videoCallMuted ? 'Muted' : (pttMode ? 'Press SPACE or hold button to talk' : 'Listening...'));
   }

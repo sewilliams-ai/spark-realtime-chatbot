@@ -197,6 +197,33 @@ frontend mobile capture/VAD state drift, with one concrete bug fixed in
 recovery plus telemetry so future missed utterances can be classified from
 server logs.
 
+## Session 2026-05-07 - mobile audio root-cause audit (Claude)
+
+User asked Claude to audit the entire codebase ASR/VAD logic for the recurring
+"mobile audio only picked up sometimes after handoff" bug, and to provide
+hypotheses given suspicion that recent codex-driven fixes are layering instead
+of fixing. No code changes made; pure diagnosis.
+
+Read `findings.md`, `task_plan.md`, recent git log, and the live state of
+`static/js/app.js` (mobile VAD/handoff/TTS state machine, lines 920-1520,
+2847-2911, 3380-3445, 3760-3840). Spawned an Explore subagent to cross-check
+the state machine and confirm citation accuracy. Verified the
+`canResumeVideoVad()` gate, `restartVideoVad()` shape, all 12
+`videoCallProcessing` clearers, and the diff of commits `ef83723` and
+`4b05bec` to see how the codex fixes evolved.
+
+Recorded the findings under "Mobile Audio Root-Cause Audit (Claude review)"
+in `findings.md`. Primary hypothesis: `handleHandoffResumed()` at line
+2869 calls a single `restartVideoVad('handoff resumed', 150)` and is missing
+the mobile dual-restart retry that `resumeVideoCallListening()` uses at
+lines 1276-1279. With seven gates in `canResumeVideoVad()` that all silently
+no-op, any single false gate during the 150ms scheduled `startVideoVad` window
+leaves VAD paused with no recovery — exactly matching the "spotty after
+handoff, mute/unmute fixes it" symptom. Secondary cause: stale
+`videoCallProcessing = true` is never cleared on handoff entry. Recommended
+fix: mirror the mobile dual-restart in `handleHandoffResumed`, plus clear
+`videoCallProcessing`/`videoCallSpeaking` there.
+
 ## Session 2026-05-07 - mute toggle investigation
 
 Started a scoped `planning-with-files` debug pass for inconsistent mute
