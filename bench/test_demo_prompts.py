@@ -120,11 +120,16 @@ def check_static_prompt_absence():
         "write events table",
         "test reconnect",
         "spark-beat4",
+        # Beat 1 now routes to html_assistant; the codebase_assistant tool stays
+        # in tools.py but must not appear in the demo prompt's routing rules.
+        "codebase_assistant",
+        "WHEN TO USE codebase_assistant",
     ]
     for term in stale:
         require(term not in VIDEO_CALL_PROMPT, f"stale prompt term still active: {term}")
-    require("mvp_brief.md" in VIDEO_CALL_PROMPT, "missing Computex MVP brief target")
-    require("codebase_assistant" in VIDEO_CALL_PROMPT, "missing codebase assistant routing")
+    require("html_assistant" in VIDEO_CALL_PROMPT, "missing html_assistant routing")
+    require("WHEN TO USE html_assistant" in VIDEO_CALL_PROMPT, "missing WHEN TO USE html_assistant block")
+    require("Turn this sketch into an MVP" in VIDEO_CALL_PROMPT, "missing sketch-to-MVP routing keyword")
     require("high mountain oolong tea" in VIDEO_CALL_PROMPT, "missing Computex gift memory")
     print("Static prompt absence: PASS")
 
