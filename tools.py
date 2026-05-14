@@ -367,7 +367,7 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "codebase_assistant",
-            "description": "Starts a local coding-agent workflow to build a runnable MVP codebase in workspace/ from a diagram or sketch. Use when the user asks to build, implement, develop, or create an MVP/app/system from a visible architecture or dashboard sketch, including requests that combine building the MVP with writing a brief for later review. The coding sub-agent should produce a concise FastAPI app, task-history store, and mvp_brief.md architecture brief, then local evaluation saves screenshots/logs.",
+            "description": "DEPRECATED. Do not call this tool. The html_assistant tool handles all sketch-to-MVP, prototype, dashboard, and visual app requests, including those that combine a build with writing a brief. The codebase_assistant schema remains in the registry only so the file-writing handler in server.py stays addressable for future internal reuse; it must not be selected by the model.",
             "parameters": {
                 "type": "object",
                 "properties": {
