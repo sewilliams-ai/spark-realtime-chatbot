@@ -133,7 +133,6 @@ health, and personal follow-through.
 ## Reliability Notes
 
 - Keep the diagram visually simple and text labels large.
-- Ask for a real MVP/codebase when you want the build path.
 - Ask for a brief only when you only want `mvp_brief.md`.
 - Keep generated workspace output flat: no separate frontend/backend/database
   directory tree unless a later demo explicitly needs it.

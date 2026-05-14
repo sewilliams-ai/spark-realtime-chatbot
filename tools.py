@@ -319,7 +319,7 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "markdown_assistant",
-            "description": "A markdown documentation assistant that writes README files, MVP briefs, design docs, guides, and other markdown documents into the shared workspace/ scratch folder. Use this when the user asks to convert a diagram, whiteboard, notes, or design into markdown.",
+            "description": "A markdown documentation assistant that writes README files, design docs, guides, and other markdown documents into the shared workspace/ scratch folder. Use when the user asks to convert notes into markdown.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -333,7 +333,7 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
                     },
                     "output_path": {
                         "type": "string",
-                        "description": "Optional relative markdown path inside workspace/. Use 'mvp_brief.md' for the Computex Agent Workbench brief or 'README.md' for a project README."
+                        "description": "Optional relative markdown path inside workspace/."
                     }
                 },
                 "required": ["task"]
