@@ -155,7 +155,7 @@ def test_cold_open_variants(url, model):
         print(f"Cold open variant {idx}: PASS :: {reply} ({elapsed:.0f}ms)")
 
 
-def test_codebase_build_variants(url, model):
+def test_html_build_variants(url, model):
     variants = [
         (
             "Hey Claw, please turn this sketch into an MVP. "
@@ -192,11 +192,11 @@ def test_codebase_build_variants(url, model):
             {"role": "user", "content": prompt},
         ], tools=tools)
         name, args = tool_call(message)
-        require(name == "codebase_assistant", f"variant {idx}: expected codebase_assistant, got {name}: {message}")
-        joined = (args.get("task", "") + " " + args.get("context", "") + " " + args.get("output_dir", "")).lower()
-        require(contains_any(joined, ["mvp", "app", "codebase", "fastapi", "dashboard"]), args)
+        require(name == "html_assistant", f"variant {idx}: expected html_assistant, got {name}: {message}")
+        joined = (args.get("task", "") + " " + args.get("context", "")).lower()
+        require(contains_any(joined, ["mvp", "prototype", "app", "dashboard", "html"]), args)
         require(contains_any(joined, ["agent", "monitor", "history", "activity", "dashboard"]), args)
-        print(f"Beat 1 codebase build variant {idx}: PASS :: {args} ({elapsed:.0f}ms)")
+        print(f"Beat 1 html build variant {idx}: PASS :: {args} ({elapsed:.0f}ms)")
 
 
 def test_mvp_brief_variants(url, model):
@@ -355,7 +355,7 @@ def main():
     tests = [
         lambda _url, _model: check_static_prompt_absence(),
         test_cold_open_variants,
-        test_codebase_build_variants,
+        test_html_build_variants,
         test_mvp_brief_variants,
         test_html_prototype_trigger,
         test_private_menu_variants,
