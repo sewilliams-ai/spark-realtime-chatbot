@@ -56,16 +56,23 @@ User shows the Agent Monitoring MVP sketch and says:
 Target behavior:
 
 - Agent acknowledges briefly:
-  > On it. I'll use your saved git hygiene and coding preferences.
-- Agent creates a runnable local MVP codebase in `workspace/agent_monitor_mvp/`.
-- MVP includes:
-  - polished dashboard UI,
-  - FastAPI server,
-  - task-history storage,
-  - architecture brief with core decisions and run instructions.
+  > On it.
+- Agent calls `html_assistant` and streams a self-contained HTML prototype of the
+  Agent Monitoring dashboard into the live preview panel.
+- The prototype includes:
+  - the visible dashboard panels (overview cards, agent list, run history,
+    activity feed),
+  - inline CSS for a polished look,
+  - minimal vanilla JavaScript for the interactive controls.
 
-Unlock: Spark is a vision-enabled local coding agent that turns a simple sketch
-into useful code and a reviewable technical brief.
+Unlock: Spark is a vision-enabled local agent that turns a simple sketch into a
+visual prototype the audience can see immediately.
+
+> **Follow-up (out of scope for this branch):** the `html_assistant` handler
+> currently streams the prototype to the live UI only. Persisting the HTML to
+> `workspace/agent_monitor_mvp.html` and writing a companion `mvp_brief.md` so
+> Beat 4 has files to review is tracked as a follow-up task. Until that lands,
+> Beat 4's artifact list below still references the legacy codebase artifacts.
 
 ## Beat 2 - Restaurant Menu Ordering - Mobile
 
