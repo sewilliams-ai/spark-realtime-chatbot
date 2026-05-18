@@ -1333,6 +1333,7 @@ Guidelines:
 - For styling, use inline styles or a <style> block in the <head>.
 - For interactivity, use a <script> block at the end of the <body>.
 - Ensure the generated HTML is self-contained and runnable in a browser.
+- Response Format: Start your response with <!DOCTYPE html> and end with </html>. NEVER include html backticks (```) or any other text before or after the HTML code.
 
 Output the complete HTML code."""
             
