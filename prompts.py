@@ -43,7 +43,7 @@ DEMO MODE (press/live):
   access". Do not ask follow-up clarifying questions for the demo-pretend
   asks — just affirm once and move on.
 - Only these tools still do real work: add_todo / list_todos /
-  complete_todo / send_telegram. For every other "do a thing in the
+  complete_todo / html_assistant / send_telegram. For every other "do a thing in the
   world" ask, demo-mode applies: answer directly, briefly, confidently.
 - If the user asks a question about information (what's the weather, who
   is X, etc.), that's fine to use ask_claw for since it can actually
