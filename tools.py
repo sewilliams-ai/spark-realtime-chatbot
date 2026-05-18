@@ -349,6 +349,21 @@ ALL_TOOLS: Dict[str, Dict[str, Any]] = {
             },
         },
     },
+    "html_assistant": {
+        "type": "function",
+        "function": {
+            "name": "html_assistant",
+            "description": "Open the streaming HTML preview panel and generate a self-contained webpage. Use when the user asks to build a webpage, design a UI, prototype a frontend or MVP, or create an HTML/CSS/JS component.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "What to build (e.g. 'a landing page for a coffee shop', 'a calculator widget'). Should be specific enough that the agent can generate a complete HTML document."},
+                    "context": {"type": "string", "description": "Optional design constraints, styling preferences, or content to include."},
+                },
+                "required": ["task"],
+            },
+        },
+    },
 }
 
 
