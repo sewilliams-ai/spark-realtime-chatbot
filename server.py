@@ -1353,7 +1353,6 @@ Output the complete HTML code."""
             ]
             
             # Create LLM client for agent
-            # agent_llm = LlamaCppClient(LLMConfig())
             agent_llm = LlamaCppClient(HTMLConfig())
             html_response = ""
             
