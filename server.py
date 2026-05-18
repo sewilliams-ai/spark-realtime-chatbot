@@ -23,7 +23,7 @@ from starlette.websockets import WebSocketState
 
 # Local modules
 from config import (
-    ASRConfig, LLMConfig, VLMConfig, ReasoningConfig, TTSConfig,
+    ASRConfig, LLMConfig, VLMConfig, TTSConfig, ReasoningConfig, HTMLConfig,
     AUDIO_DIR, STATIC_DIR, SAMPLE_RATE, WORKSPACE_ROOT, FFMPEG_PATH
 )
 from audio import check_ffmpeg_available, decode_webm_bytes_to_pcm_f32
@@ -1319,6 +1319,16 @@ CRITICAL INSTRUCTIONS:
     async def execute_html_agent(self, task: str, context: str = ""):
         """Execute the HTML assistant agent and stream results."""
         try:
+            # Orchestrator (Qwen, temp=0.7) sometimes omits `task` despite the
+            # schema marking it required. Anchor on the last user utterance so
+            # we don't fall back to the HTML model's generic-demo prior.
+            if not task.strip():
+                for msg in reversed(self.conversation_history):
+                    content = msg.get("content")
+                    if msg.get("role") == "user" and isinstance(content, str) and content.strip():
+                        task = content
+                        print(f"[Voice Session] HTML agent task empty; using last user turn: {task[:80]!r}")
+                        break
             print(f"[Voice Session] Executing HTML agent: {task[:50]}...")
             
             # Signal agent started
@@ -1343,7 +1353,8 @@ Output the complete HTML code."""
             ]
             
             # Create LLM client for agent
-            agent_llm = LlamaCppClient(LLMConfig())
+            # agent_llm = LlamaCppClient(LLMConfig())
+            agent_llm = LlamaCppClient(HTMLConfig())
             html_response = ""
             
             # Send initial chunk to signal start
