@@ -26,6 +26,11 @@ export REASONING_SERVER_URL="${REASONING_SERVER_URL:-http://localhost:11434/v1/c
 export REASONING_MODEL="${REASONING_MODEL:-qwen3.6:35b-a3b}"
 export REASONING_EFFORT="${REASONING_EFFORT:-high}"
 
+export HTML_SERVER_URL="${HTML_SERVER_URL:-http://localhost:11434/v1/chat/completions}"
+export HTML_MODEL="${HTML_MODEL:-qwen3.6:35b-a3b}"
+export HTML_MAX_TOKENS="${HTML_MAX_TOKENS:-8192}"
+export HTML_REASONING_EFFORT="${HTML_REASONING_EFFORT:-none}"
+
 export TTS_ENGINE="${TTS_ENGINE:-kokoro}"         # kokoro | chatterbox
 export TTS_DEVICE="${TTS_DEVICE:-cuda}"           # cuda (default, 70× RT on GB10 w/ cu130) | cpu
 export KOKORO_LANG="${KOKORO_LANG:-a}"
@@ -86,6 +91,9 @@ echo "LLM Max Tokens: $LLM_MAX_TOKENS"
 echo "VLM URL: $VLM_SERVER_URL"
 echo "VLM Model: $VLM_MODEL"
 echo "VLM Max Tokens: $VLM_MAX_TOKENS"
+echo "HTML URL: $HTML_SERVER_URL"
+echo "HTML Model: $HTML_MODEL"
+echo "HTML Max Tokens: $HTML_MAX_TOKENS"
 echo "TTS Overlap: $TTS_OVERLAP"
 echo "HF Cache: $HUGGINGFACE_HUB_CACHE"
 echo "Port: $PORT (HTTPS)"
