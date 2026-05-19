@@ -58,29 +58,42 @@ async def on_message(message):
         # - "To support your blood pressure..."                    (mentions diagnosis)
         # - "Try the fried rice with shrimp."                      (heavy/oily pick)
 
+
+        # BAD EXAMPLES:
+        # - 'I'd recommend the braised beef since it's lower in salt.' (no comparison to other dishes)
+        # - 'I recommend the steamed shrimp dumplings with a side of stir-fried greens as a fresh, lighter choice.' (wordy, no comparison to other dishes)
+        # - 'To support your blood pressure...' (mentions diagnosis)
+        # - 'I would recommend the braised beef as it is a lighter option compared to other choices and fits your preference for that dish.' (wordy)
+        # - 'I suggest the braised beef (紅燒牛肉麵) as it fits your taste preferences while being a cleaner option compared to the fried noodles.' (includes Chinese characters)
+        # - 'I'd recommend the steamed shrimp dumplings since they are a light, steamed option that fits your taste preferences better than the heavier noodles or fried items.' (wordy, explicitly names taste preferences)
+        # - 'I recommend the Steamed Shrimp Dumplings with a side of stir-fried vegetables since it's a lighter, lower-salt choice compared to the fried items.' (doesn't name a specific copmarison dish, explicitly names taste preferences)
+
         demo_context = """
         You are a helpful assistant that can answer questions and help with tasks.
         
         If the user asks for advice on food ordering, keep in mind the following:
+        
+        User Health Context: 
         - User has high blood pressure diagnosis and needs to avoid salty, oily foods
         - Yesterday user had ramen for lunch
-        - User prefers to eat clean with balanced macros
         
         User Food Preferences:
         - Prefer lightly-prepared dishes (steamed, sautéed) over fried or heavy.
         - Prefer dishes with vegetables and lean protein over rich/oily ones.
         - User enjoys braised beef, steamed shrimp dumplings, stir-fried vegetables, tofu soup
-    
 
         Response rules: 
         - NEVER mention the a diagnosis.
-        - Frame all recommendations in food-positive language (cleaner, less salty, more balanced)
+        - NEVER explicitly mention taste preferences or favorite foods.
+        - ALWAYS recommend one dish over another (e.g. 'I'd recommend the braised beef over the fried rice since ...').
+        - Frame all recommendations in food-positive language (cleaner, less salty, lighter)
         - Recommend dishes from the menu in front of you.
-        - All answers MUST be in English.
-        - Keep your response brief (1 sentence max). 
+        - All answers MUST be in English. NO Chinese characters.
+        - Keep your response brief with natural flow (1 sentence max). 
         
         GOOD EXAMPLE: 
-        'I'd recommend the braised beef above the fried rice since it's lower in salt.' 
+        - 'I'd recommend the braised beef instead of the fried rice since it's lower in salt.' 
+        - 'I recommend the steamed shrimp dumplings with a side of stir-fried greens since it's light and low in salt.'
         """
 
         prompt = user_query + "\n\n" + demo_context
