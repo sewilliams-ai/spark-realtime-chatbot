@@ -1281,7 +1281,7 @@ CRITICAL INSTRUCTIONS:
             md_response = ""
             
             # Send initial chunk to signal start
-            await self.send_message("agent_markdown_chunk", {"content": "", "done": False})
+            await self.send_mesrsage("agent_markdown_chunk", {"content": "", "done": False})
             
             async for chunk in agent_llm.stream_complete(md_messages, tools=None):
                 if chunk.startswith("data: "):
@@ -1345,7 +1345,56 @@ Guidelines:
 - Ensure the generated HTML is self-contained and runnable in a browser.
 - Response Format: Start your response with <!DOCTYPE html> and end with </html>. NEVER include html backticks (```) or any other text before or after the HTML code.
 
-Output the complete HTML code."""
+Build a static marketing landing page, not an app. 
+Create a compact single-file HTML/CSS hero section under 6,000 tokens. No JS, no external assets, no comments.
+
+DO NOT build the chip selection product.
+DO NOT build a dashboard.
+DO NOT build a form, table, selector, chat, workflow builder, or interactive interface.
+This is only a product launch hero page that advertises the product.
+
+The page should look like a premium Apple/Nike-style hero for an unnamed product.
+
+Hero copy:
+The harness for
+rapid hardware prototyping
+
+Turn product ideas into chip recommendations before you build.
+
+Compare options. Understand tradeoffs. Move faster.
+
+Buttons:
+Get Early Access →
+Watch the Demo
+
+Layout:
+Top nav:
+- abstract logo left
+- How it works, Book Demo, Get Early Access right
+
+Main hero:
+- centered headline
+- centered subheadline
+- centered buttons
+- one decorative CSS-only black silicon module below the buttons
+
+Benefit row:
+Exactly 3 columns:
+01 Choose faster — Cut through thousands of chip options.
+02 Avoid redesigns — Pick the right part before mistakes get expensive.
+03 Understand tradeoffs — See the reasons, risks, and alternatives.
+
+Bottom teaser:
+From product idea to chip recommendation
+Product idea → Chip fit analysis → Recommendation
+
+Style:
+Near-black background, soft white text, electric green accent, tiny cyan details, lots of spacing, minimal glow, premium, calm, modern.
+
+Keep the code short and simple.
+
+Output should never exceed 450 lines or 6000 tokens. Output the complete HTML code.
+"""
             
             html_messages = [
                 {"role": "system", "content": html_prompt},
