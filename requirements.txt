@@ -25,6 +25,9 @@ mcp
 requests
 beautifulsoup4
 
+# Discord bot
+discord 
+
 # Optional backends for llm-sandbox
 podman
 kubernetes
