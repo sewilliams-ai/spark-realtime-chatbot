@@ -1,18 +1,81 @@
 import base64
 import io
+import json
 import os
+import sys
+from pathlib import Path
 
 import discord
 import requests
 from PIL import Image
+from faster_whisper import WhisperModel
+
+# Make the project root importable so we can pull in tools.py from clients/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tools import ALL_TOOLS, _INLINE_DISPATCH
 
 MAX_IMAGE_EDGE = 768  # long-edge px; lower = fewer image tokens
+ASR_MODEL = WhisperModel("Systran/faster-whisper-small.en", device="cuda")
 
 # 1. Configuration
 TOKEN = os.environ['DISCORD_BOT_TOKEN']
 # APPLICATION_URL = 'https://discord.com/oauth2/authorize?client_id=1506326445692026920&permissions=8&integration_type=0&scope=bot' # this link adds the bot to a server
 INFERENCE_URL = 'http://localhost:30000/v1/chat/completions'
-MODEL_NAME = 'Qwen 3.6 35B A3B'  # Your pulled model
+MODEL_NAME = 'Qwen 3.6 35B A3B'
+
+WRITE_FILE_TOOL = ALL_TOOLS["write_file"]
+
+ORCHESTRATOR_PROMPT = """You are Claw, my personal AI assistant — a helpful lobster 🦞 — running fully on NVIDIA DGX Spark. 
+You handle two kinds of requests. Pick exactly one mode per turn based on the user's message.
+
+=== MODE A: FOOD ORDERING ===
+Trigger: user asks what to eat, what to order, or shares a menu photo.
+Do not use any tool in this mode.
+
+User Health Context:
+- User has high blood pressure diagnosis and needs to avoid salty, oily foods
+- Yesterday user had ramen for lunch
+
+User Food Preferences:
+- Prefer lightly-prepared dishes (steamed, sautéed) over fried or heavy.
+- Prefer dishes with vegetables and lean protein over rich/oily ones.
+- User enjoys braised beef, steamed shrimp dumplings, stir-fried vegetables, tofu soup
+
+Response rules:
+- NEVER mention the a diagnosis.
+- NEVER explicitly mention taste preferences or favorite foods.
+- ALWAYS recommend one dish over another (e.g. 'I'd recommend the braised beef over the fried rice because...').
+- Frame all recommendations in food-positive language (cleaner, less salty, lighter)
+- Recommend dishes from the menu in front of you.
+- All answers MUST be in English. NO Chinese characters.
+- If the menu is in a non-English language, SILENTLY translate dish names to English and use the English name in your recommendation. Do not mention that you translated.
+- NEVER add notes, disclaimers, parentheticals, or meta-commentary about the menu, the language, or your reasoning.
+- Keep your response brief with natural flow (1 sentence max, no parentheticals).
+
+GOOD EXAMPLE:
+- 'I'd recommend the braised beef instead of the fried rice since it's lower in salt.'
+- 'I recommend the steamed shrimp dumplings with a side of stir-fried greens since it's light and low in salt.'
+
+BAD EXAMPLE (do NOT produce):
+- 'I'd recommend the steamed shrimp dumplings. (Note: this menu is in Chinese, so I translated the dish names.)'  ← never add a Note or parenthetical
+- 'The menu appears to be in Chinese, but I'd recommend...'                                                       ← never reference the menu's language
+
+=== MODE B: EMAIL DRAFTING ===
+Trigger: user asks you to draft, write, send, or compose an email or message.
+
+Rules:
+- Call the write_file tool with path "workspace/<short-descriptive-slug>.md".
+- Write the email as markdown with this structure:
+  - `# Subject: <subject line>` as the top-level heading
+  - Greeting line (e.g. "Hi team,")
+  - Body paragraphs — use **bold** for emphasis and `- ` bullet lists for action items or updates
+  - Sign-off (e.g. "Thanks,\n<name>")
+- In your chat response, say ONE short sentence acknowledging the request (e.g. "On it - drafting that now.").
+- Do NOT include the email body in the chat response.
+
+=== FALLBACK ===
+For any other request, respond briefly as a helpful assistant. Do not use tools.
+"""
 
 # 2. Setup Bot Intents
 intents = discord.Intents.default()
@@ -26,111 +89,76 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    # Ignore messages sent by the bot itself
-    if message.author == client.user:
+    # Ignore messages from any bot (self or others) to prevent loops
+    if message.author.bot:
         return
 
-    # Trigger when someone tags the bot
-    if client.user in message.mentions:
-        user_query = message.content.replace(f'<@!{client.user.id}>', '').strip()
+    user_query = message.content.strip()
 
-        # You are a helpful assistant for food-ordering decisions.
+    # Transcribe any audio attachments and fold into the text prompt
+    for att in message.attachments:
+        if att.content_type and att.content_type.startswith("audio/"):
+            segments, _ = ASR_MODEL.transcribe(io.BytesIO(await att.read()), language="en")
+            transcript = " ".join(s.text for s in segments).strip()
+            user_query = (user_query + " " + transcript).strip()
 
-        # Style rules — follow strictly:
-        # - Name 1-2 specific dishes visible in the menu photo.
-        # - Give a brief, lightweight reason using only the words "light", "clean", or "balanced".
-        # - Never reference what the user ate previously or any personal history.
-        # - Never mention a diagnosis or health condition.
-        # - Never name a "favorite" food by category — just pick from the menu in front of you.
-        # - All answers MUST be in English.
-        # - Keep your response to ONE sentence.
+    parts = [{"type": "text", "text": user_query}]
+    for att in message.attachments:
+        if not (att.content_type and att.content_type.startswith("image/")):
+            continue
+        img = Image.open(io.BytesIO(await att.read())).convert("RGB")
+        img.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
-        # Hidden preferences (use to bias picks, never cite):
-        # - Prefer lightly-prepared dishes (steamed, sautéed) over fried or heavy.
-        # - Prefer dishes with vegetables and lean protein over rich/oily ones.
+    async with message.channel.typing():
+        payload = {
+            "model": MODEL_NAME,
+            "messages": [
+                {"role": "system", "content": ORCHESTRATOR_PROMPT},
+                {"role": "user", "content": parts},
+            ],
+            "tools": [WRITE_FILE_TOOL],
+            "max_tokens": 512,
+            "stream": False,
+            "cache_prompt": True,
+        }
 
-        # GOOD EXAMPLE:
-        # "I'd go with the steamed shrimp dumplings and a side of stir-fried bok choy — both are light, clean, and a nicely balanced pick."
+        print(f"\n--- [user] {user_query!r}  (images: {sum(1 for p in parts if p.get('type')=='image_url')})")
+        try:
+            response = requests.post(INFERENCE_URL, json=payload, timeout=120)
+            response.raise_for_status()
+            data = response.json()
+            msg = data["choices"][0]["message"]
+        except Exception as e:
+            print(f"--- [error] {e}")
+            await message.channel.send(f"Sorry, I couldn't reach my local AI backend ({e}).")
+            return
 
-        # BAD EXAMPLES (do NOT produce):
-        # - "Since you had ramen yesterday, skip the noodles..."   (references past meals)
-        # - "Given your love for braised beef, try..."             (names favorites)
-        # - "To support your blood pressure..."                    (mentions diagnosis)
-        # - "Try the fried rice with shrimp."                      (heavy/oily pick)
+        finish_reason = data["choices"][0].get("finish_reason")
+        content = msg.get("content") or ""
+        tool_calls = msg.get("tool_calls") or []
+        print(f"--- [model] finish={finish_reason}  content={content!r}")
+        if tool_calls:
+            print(f"--- [model] tool_calls={[(tc['function']['name'], tc['function']['arguments'][:120]) for tc in tool_calls]}")
 
+        # Send the model's chat text (or a fallback ack if it skipped the preamble)
+        if content:
+            for i in range(0, len(content), 2000):
+                await message.channel.send(content[i:i+2000])
+        elif tool_calls:
+            await message.channel.send("On it - drafting now.")
 
-        # BAD EXAMPLES:
-        # - 'I'd recommend the braised beef since it's lower in salt.' (no comparison to other dishes)
-        # - 'I recommend the steamed shrimp dumplings with a side of stir-fried greens as a fresh, lighter choice.' (wordy, no comparison to other dishes)
-        # - 'To support your blood pressure...' (mentions diagnosis)
-        # - 'I would recommend the braised beef as it is a lighter option compared to other choices and fits your preference for that dish.' (wordy)
-        # - 'I suggest the braised beef (紅燒牛肉麵) as it fits your taste preferences while being a cleaner option compared to the fried noodles.' (includes Chinese characters)
-        # - 'I'd recommend the steamed shrimp dumplings since they are a light, steamed option that fits your taste preferences better than the heavier noodles or fried items.' (wordy, explicitly names taste preferences)
-        # - 'I recommend the Steamed Shrimp Dumplings with a side of stir-fried vegetables since it's a lighter, lower-salt choice compared to the fried items.' (doesn't name a specific copmarison dish, explicitly names taste preferences)
-
-        demo_context = """
-        You are a helpful assistant that can answer questions and help with tasks.
-        
-        If the user asks for advice on food ordering, keep in mind the following:
-        
-        User Health Context: 
-        - User has high blood pressure diagnosis and needs to avoid salty, oily foods
-        - Yesterday user had ramen for lunch
-        
-        User Food Preferences:
-        - Prefer lightly-prepared dishes (steamed, sautéed) over fried or heavy.
-        - Prefer dishes with vegetables and lean protein over rich/oily ones.
-        - User enjoys braised beef, steamed shrimp dumplings, stir-fried vegetables, tofu soup
-
-        Response rules: 
-        - NEVER mention the a diagnosis.
-        - NEVER explicitly mention taste preferences or favorite foods.
-        - ALWAYS recommend one dish over another (e.g. 'I'd recommend the braised beef over the fried rice since ...').
-        - Frame all recommendations in food-positive language (cleaner, less salty, lighter)
-        - Recommend dishes from the menu in front of you.
-        - All answers MUST be in English. NO Chinese characters.
-        - Keep your response brief with natural flow (1 sentence max). 
-        
-        GOOD EXAMPLE: 
-        - 'I'd recommend the braised beef instead of the fried rice since it's lower in salt.' 
-        - 'I recommend the steamed shrimp dumplings with a side of stir-fried greens since it's light and low in salt.'
-        """
-
-        prompt = user_query + "\n\n" + demo_context
-
-        parts = [{"type": "text", "text": prompt}]
-        for att in message.attachments:
-            img = Image.open(io.BytesIO(await att.read())).convert("RGB")
-            img.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE))
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
-            b64 = base64.b64encode(buf.getvalue()).decode()
-            parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-
-        # Send a typing indicator while processing
-        async with message.channel.typing():
-
-            # Send prompt to local AI (OpenAI-compatible chat/completions shape)
-            payload = {
-                "model": MODEL_NAME,
-                "messages": [{"role": "user", "content": parts}],
-                "max_tokens": 512,
-                "stream": False,
-            }
-
-            try:
-                response = requests.post(INFERENCE_URL, json=payload, timeout=120)
-                response.raise_for_status()
-                ai_response = response.json()["choices"][0]["message"]["content"]
-            except Exception as e:
-                ai_response = f"Sorry, I couldn't reach my local AI backend ({e})."
-
-            # Split and send the response if it exceeds Discord's 2000 character limit
-            if len(ai_response) > 2000:
-                chunks = [ai_response[i:i+2000] for i in range(0, len(ai_response), 2000)]
-                for chunk in chunks:
-                    await message.channel.send(chunk)
+        # Execute any tool calls and emit a confirmation per result
+        for tc in tool_calls:
+            name = tc["function"]["name"]
+            args = json.loads(tc["function"]["arguments"])
+            result = json.loads(await _INLINE_DISPATCH[name](args))
+            if result.get("ok"):
+                await message.channel.send(f"Saved to `{result['path']}`")
             else:
-                await message.channel.send(ai_response)
+                await message.channel.send(f"Tool error: {result.get('error', 'unknown')}")
 
 client.run(TOKEN)
