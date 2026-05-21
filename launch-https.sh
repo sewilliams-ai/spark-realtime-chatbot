@@ -28,7 +28,7 @@ export REASONING_EFFORT="${REASONING_EFFORT:-high}"
 
 export HTML_SERVER_URL="${HTML_SERVER_URL:-http://localhost:11434/v1/chat/completions}"
 export HTML_MODEL="${HTML_MODEL:-qwen3.6:35b-a3b}"
-export HTML_MAX_TOKENS="${HTML_MAX_TOKENS:-8192}"
+export HTML_MAX_TOKENS="${HTML_MAX_TOKENS:-12288}"
 export HTML_REASONING_EFFORT="${HTML_REASONING_EFFORT:-none}"
 
 export TTS_ENGINE="${TTS_ENGINE:-kokoro}"         # kokoro | chatterbox
