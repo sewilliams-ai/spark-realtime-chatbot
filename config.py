@@ -49,8 +49,8 @@ class HTMLConfig:
     """HTML Config — same Qwen3.6 model, capping output generation at 8192 """
     base_url: str = os.getenv("HTML_SERVER_URL", OLLAMA_DEFAULT_URL)
     model: str = os.getenv("HTML_MODEL", QWEN36_MODEL)
-    temperature: float = float(os.getenv("HTML_TEMP", "0.2"))
-    max_tokens: int = int(os.getenv("HTML_MAX_TOKENS", "8192"))
+    temperature: float = float(os.getenv("HTML_TEMP", "0.01"))
+    max_tokens: int = int(os.getenv("HTML_MAX_TOKENS", "12288"))
     reasoning_effort: str = os.getenv("HTML_REASONING_EFFORT", "none")
     backend: str = os.getenv("LLM_BACKEND", "ollama")
 
