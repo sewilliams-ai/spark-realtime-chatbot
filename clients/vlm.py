@@ -9,6 +9,7 @@ import aiohttp
 
 from config import VLMConfig
 from .http_session import get_http_manager
+from .llm import _fire_usage
 
 
 class VLMClient:
@@ -88,6 +89,7 @@ class VLMClient:
                     return {"content": f"VLM error: {resp.status}", "tool_calls": []}
 
                 result = await resp.json()
+                await _fire_usage(result.get("usage"))
 
                 # Extract response
                 choice = result.get("choices", [{}])[0]
