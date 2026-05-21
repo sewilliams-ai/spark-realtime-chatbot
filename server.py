@@ -188,18 +188,18 @@ async def broadcast_token_usage():
         await s.send_message("token_usage", dict(TOKEN_COUNTS))
 
 
-def record_usage(source: str, usage: Dict[str, Any]):
-    """Hook fired from clients/llm.py when an LLM `usage` dict arrives."""
+async def record_usage(source: str, usage: Dict[str, Any]):
+    """Hook fired from clients/llm.py when an LLM `usage` dict arrives.
+    Awaited inline with the LLM stream so the broadcast lands while the
+    WS is still alive (the WS often closes immediately after the stream ends).
+    """
     if source not in TOKEN_COUNTS:
         print(f"[token_usage] unknown source '{source}', dropping {usage}")
         return
     delta = int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
     TOKEN_COUNTS[source] += delta
     print(f"[token_usage] +{delta} {source} → {TOKEN_COUNTS} (active sessions: {len(ACTIVE_SESSIONS)})")
-    try:
-        asyncio.get_running_loop().create_task(broadcast_token_usage())
-    except RuntimeError:
-        pass  # no running loop (shouldn't happen from request handlers)
+    await broadcast_token_usage()
 
 
 @app.post("/api/token_usage")
