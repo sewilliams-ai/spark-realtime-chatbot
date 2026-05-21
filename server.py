@@ -1389,6 +1389,22 @@ CRITICAL INSTRUCTIONS:
 # - How it works, Book Demo, Get Early Access right
 
 
+## okay so I'm thinking about re-building the html prompt with better formatting to be more realistic to a demo
+## basically by factoring out the project specific folders - similar to how an agent would populate a code base -- so let's have a look at that
+##
+## Style Preferences: 
+## <from style_preferences/frontend_style_preferences.md
+##
+## Response Guidelines: 
+## <hard coded into the html assitant>
+## Info about 
+## 
+## Project Details 
+## <e.g. taglines, info about the project>
+##
+##
+
+
             # Build messages for HTML generation
             html_prompt = """You are an expert HTML, CSS, and JavaScript assistant. Generate clean, semantic, and functional web pages or components.
 
@@ -1434,9 +1450,6 @@ bottom teaser):
 as the centering mechanism. Do NOT rely on text-align alone.
 - Inside each section, wrap content in an inner container with an
 explicit max-width (around 720px for prose, 1100px for grids) and use
-margin 0 auto on that wrapper. Centering without a max-width does
-nothing — both must be present together.
-- For rows of buttons or CTAs, the row itself must be a flex container
 margin 0 auto on that wrapper. Centering without a max-width does
 nothing — both must be present together.
 - For rows of buttons or CTAs, the row itself must be a flex container
