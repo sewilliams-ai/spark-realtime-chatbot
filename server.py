@@ -44,6 +44,27 @@ from clients.llm import set_usage_hook
 from prompts import DEFAULT_SYSTEM_PROMPT
 
 
+# ─── html_assistant system prompt ────────────────────────────────────────
+# Assembled once at import from three sources:
+#   1. _HTML_ROLE       — generic assistant role + brevity (lives in code)
+#   2. style_preferences/frontend_style_preferences.md — generic style guide
+#   3. projects/<x>.md  — project-specific copy + sections
+# Order is generic→specific so llama-server can prefix-cache the first two
+# halves across runs (and across projects, if the style guide is shared).
+_HTML_ROLE = """You are an expert HTML, CSS, and JavaScript assistant. Generate clean, semantic, and functional web pages or components.
+
+Keep the code short and simple.
+
+Output should never exceed 450 lines or 6000 tokens. Output the complete HTML code."""
+
+_HERE = Path(__file__).parent
+HTML_PROMPT = "\n\n".join([
+    _HTML_ROLE,
+    (_HERE / "demo_files" / "style_preferences" / "frontend_style_preferences.md").read_text(encoding="utf-8").strip(),
+    (_HERE / "demo_files" / "projects" / "chip_selector_harness.md").read_text(encoding="utf-8").strip(),
+])
+
+
 def _safely_spoken_flag(blob) -> bool:
     """True if a tool result JSON has {"spoken": true}.
     Used by the agent loop to know whether ask_claw already streamed its
@@ -1405,117 +1426,11 @@ CRITICAL INSTRUCTIONS:
 ##
 
 
-            # Build messages for HTML generation
-            html_prompt = """You are an expert HTML, CSS, and JavaScript assistant. Generate clean, semantic, and functional web pages or components.
-
-Guidelines:
-- Generate complete HTML documents including <!DOCTYPE html>, <html>, <head>, and <body>.
-- Use modern HTML5, CSS3, and vanilla JavaScript.
-- For styling, use inline styles or a <style> block in the <head>.
-- For interactivity, use a <script> block at the end of the <body>.
-- Ensure the generated HTML is self-contained and runnable in a browser.
-- Response Format: Start your response with <!DOCTYPE html> and end with </html>. NEVER include html backticks (```) or any other text before or after the HTML code.
-
-Build a static marketing landing page, not an app. 
-Create a compact single-file HTML/CSS hero section under 6,000 tokens. No JS, no external assets, no comments.
-
-DO NOT build the chip selection product.
-DO NOT build a dashboard.
-DO NOT build a form, table, selector, chat, workflow builder, or interactive interface.
-This is only a product launch hero page that advertises the product.
-
-The page should look like a premium Apple/Nike-style hero for an unnamed product.
-
-Hero copy:
-The harness for
-rapid hardware prototyping
-
-Turn product ideas into chip recommendations before you build.
-
-Compare options. Understand tradeoffs. Move faster.
-
-Buttons:
-Get Early Access →
-Watch the Demo
-
-Layout requirements:
-
-Reset the page first: zero out body margin and padding, and apply
-border-box sizing to all elements. This is non-negotiable — without it,
-centering will be off by a few pixels and look wrong.
-
-Centering rules for every horizontally-centered section (hero, benefits,
-bottom teaser):
-- Use a flex container with align-items center and justify-content center
-as the centering mechanism. Do NOT rely on text-align alone.
-- Inside each section, wrap content in an inner container with an
-explicit max-width (around 720px for prose, 1100px for grids) and use
-margin 0 auto on that wrapper. Centering without a max-width does
-nothing — both must be present together.
-- For rows of buttons or CTAs, the row itself must be a flex container
-with justify-content center and a gap between items.
-
-For the benefit row specifically: it must be a CSS grid with three equal
-columns and a shared max-width wrapper. Do not use floats, inline-block,
-or a flex row for the three columns — only grid.
-
-  For the top nav: flex with space-between, wrapped in a max-width
-  container that is itself margin 0 auto.
-
-
-
-ALLOWED SECTIONS — generate EXACTLY these four, in this order, and NOTHING ELSE:
-
-1. Top nav:
-   - text logo on the left (use the invented name "Harness")
-   - 3-4 nav links on the right: How it works, Book Demo, Get Early Access
-
-2. Main hero:
-   - centered headline (use exact copy from above)
-   - centered subheadline (use exact copy from above)
-   - centered button row with two buttons
-   - Hero ends at the button row. No decorative graphic, chip module, or visual element below the buttons.
-
-3. Benefit row — exactly 3 columns in a CSS grid:
-   01 Choose faster — Cut through thousands of chip options.
-   02 Avoid redesigns — Pick the right part before mistakes get expensive.
-   03 Understand tradeoffs — See the reasons, risks, and alternatives.
-
-   Each benefit must be a rectangular bordered card, not bare text:
-   - 1px solid border in dark gray (#222 or similar, blending with the
-     near-black background)
-   - 12px border-radius
-   - ~32px internal padding
-   - Card background slightly lighter than the page (e.g. #0a0a0a)
-   The number (01, 02, 03) sits at the top in cyan accent. The title and
-   description go below, in white and gray respectively.
-
-4. Bottom teaser:
-   Headline: "From product idea to chip recommendation"
-   A 3-card row showing the flow: Product idea → Chip fit analysis → Recommendation
-   Each card contains ONLY its name (e.g., "Product idea") with arrows between cards.
-   No descriptions, labels, sub-text, or per-card explanations.
-
-The page consists of exactly the four sections above and no others.
-After writing the bottom teaser, immediately close </body></html> and stop.
-
-Style:
-- Background: #050505 (near-black)
-- Primary text: #f0f0f0 (soft white)
-- Subdued text: #888 (gray)
-- Primary CTA background: #00ff9d (electric green) — ONLY the main CTA button
-- Cyan #00f3ff used SPARINGLY — only tiny accents like benefit numbers (01, 02, 03)
-- Do NOT use cyan for headlines, body text, or button backgrounds.
-- Do NOT use blue, purple, yellow, orange, red, or any other primary color.
-- Generous spacing, minimal glow, premium, calm, modern.
-
-Keep the code short and simple.
-
-Output should never exceed 450 lines or 6000 tokens. Output the complete HTML code.
-"""
-            
+            # System prompt is assembled at import from
+            # _HTML_ROLE + frontend_style_preferences.md + chip_selector_harness.md
+            # (see HTML_PROMPT near the top of this file).
             html_messages = [
-                {"role": "system", "content": html_prompt},
+                {"role": "system", "content": HTML_PROMPT},
                 {"role": "user", "content": f"Task: {task}\n\nContext: {context}" if context else f"Task: {task}"}
             ]
             
