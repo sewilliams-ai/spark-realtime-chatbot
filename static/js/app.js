@@ -1765,9 +1765,17 @@ function toggleConfig() {
   const configContent = document.getElementById("configContent");
   const configSection = document.querySelector(".config-section");
   const isVisible = configContent.style.display !== "none";
-  
+
   configContent.style.display = isVisible ? "none" : "block";
   configSection.classList.toggle("expanded", !isVisible);
+}
+
+function toggleTokens() {
+  const content = document.getElementById("tokensContent");
+  const section = document.getElementById("tokensToggle").parentElement;
+  const isVisible = content.style.display !== "none";
+  content.style.display = isVisible ? "none" : "block";
+  section.classList.toggle("expanded", !isVisible);
 }
 
 function setConnectionStatus(status) {
@@ -2587,6 +2595,14 @@ async function handleMessage(data) {
       initializeAudioOnConnection();
       // Greeting will be sent by server automatically
       break;
+
+    case "token_usage": {
+      const total = data.web + data.discord;
+      document.getElementById("tokensWeb").textContent = data.web;
+      document.getElementById("tokensDiscord").textContent = data.discord;
+      document.getElementById("tokensTotal").textContent = total;
+      break;
+    }
 
     case "asr_partial":
       // Update current user message with partial transcription
