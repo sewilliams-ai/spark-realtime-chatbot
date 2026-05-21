@@ -24,13 +24,13 @@ def set_usage_hook(fn):
     global _usage_hook
     _usage_hook = fn
 
-def _fire_usage(usage):
+async def _fire_usage(usage):
     if not isinstance(usage, dict):
         return
     print(f"[LLM] usage received: {usage}")
     if _usage_hook:
         try:
-            _usage_hook("web", usage)
+            await _usage_hook("web", usage)
         except Exception as e:
             print(f"[LLM] usage hook error: {e}")
     else:
@@ -71,7 +71,7 @@ class LlamaCppClient:
         async with session.post(self.cfg.base_url, json=payload) as resp:
             data = await resp.json()
 
-        _fire_usage(data.get("usage"))
+        await _fire_usage(data.get("usage"))
         raw = data["choices"][0]["message"]["content"]
         return self._extract_final_channel(raw)
 
@@ -182,7 +182,7 @@ class LlamaCppClient:
                                 if not choices:
                                     # Final usage chunk (when stream_options.include_usage=true)
                                     # comes through with choices=[] and a top-level usage dict.
-                                    _fire_usage(data.get("usage"))
+                                    await _fire_usage(data.get("usage"))
                                     continue
                                 
                                 choice = choices[0]
