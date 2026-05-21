@@ -2596,13 +2596,9 @@ async function handleMessage(data) {
       // Greeting will be sent by server automatically
       break;
 
-    case "token_usage": {
-      const total = data.web + data.discord;
-      document.getElementById("tokensWeb").textContent = data.web;
-      document.getElementById("tokensDiscord").textContent = data.discord;
-      document.getElementById("tokensTotal").textContent = total;
+    case "token_usage":
+      document.getElementById("tokensTotal").textContent = (data.web + data.discord).toLocaleString();
       break;
-    }
 
     case "asr_partial":
       // Update current user message with partial transcription
