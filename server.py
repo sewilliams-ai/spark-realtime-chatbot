@@ -12,6 +12,7 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,6 +38,7 @@ from clients import (
     create_tts,
 )
 from clients.http_session import set_http_manager
+from clients.llm import set_usage_hook
 
 # Import system prompt
 from prompts import DEFAULT_SYSTEM_PROMPT
@@ -110,6 +112,7 @@ async def lifespan(app: FastAPI):
         asr.warmup()
     llm = LlamaCppClient(LLMConfig())
     tts = create_tts(TTSConfig())
+    set_usage_hook(record_usage)
     yield
     # Cleanup: close shared HTTP session
     if http_manager:
@@ -136,6 +139,7 @@ app = FastAPI(title="Voice Chat (Streaming)", lifespan=lifespan)
 # Serve static files (frontend)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
+app.mount("/workspace", StaticFiles(directory=str(Path(__file__).parent / "workspace")), name="workspace")
 
 
 # -----------------------------
@@ -146,6 +150,50 @@ app.mount("/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 async def health_check():
     """Health check endpoint for Docker."""
     return {"status": "ok"}
+
+
+# -----------------------------
+# Token counter (sums LLM usage across web + discord adapters).
+# Resets on server restart. Discord posts deltas to /api/token_usage.
+# -----------------------------
+
+TOKEN_COUNTS: Dict[str, int] = {"web": 0, "discord": 0}
+ACTIVE_SESSIONS: List["VoiceSession"] = []
+
+
+async def broadcast_token_usage():
+    """Push current TOKEN_COUNTS to every connected browser session."""
+    for s in list(ACTIVE_SESSIONS):
+        await s.send_message("token_usage", dict(TOKEN_COUNTS))
+
+
+def record_usage(source: str, usage: Dict[str, Any]):
+    """Hook fired from clients/llm.py when an LLM `usage` dict arrives."""
+    if source not in TOKEN_COUNTS:
+        print(f"[token_usage] unknown source '{source}', dropping {usage}")
+        return
+    delta = int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
+    TOKEN_COUNTS[source] += delta
+    print(f"[token_usage] +{delta} {source} → {TOKEN_COUNTS} (active sessions: {len(ACTIVE_SESSIONS)})")
+    try:
+        asyncio.get_running_loop().create_task(broadcast_token_usage())
+    except RuntimeError:
+        pass  # no running loop (shouldn't happen from request handlers)
+
+
+@app.post("/api/token_usage")
+async def ingest_token_usage(request: Request):
+    """Discord adapter posts {source, prompt_tokens, completion_tokens} here."""
+    payload = await request.json()
+    source = payload.get("source", "discord")
+    print(f"[token_usage] POST received: {payload}")
+    if source not in TOKEN_COUNTS:
+        return {"ok": False, "error": f"unknown source: {source}"}
+    delta = int(payload.get("prompt_tokens", 0)) + int(payload.get("completion_tokens", 0))
+    TOKEN_COUNTS[source] += delta
+    print(f"[token_usage] +{delta} {source} → {TOKEN_COUNTS} (active sessions: {len(ACTIVE_SESSIONS)})")
+    await broadcast_token_usage()
+    return {"ok": True, "counts": dict(TOKEN_COUNTS)}
 
 
 @app.get("/api/default_prompt")
@@ -1333,7 +1381,14 @@ CRITICAL INSTRUCTIONS:
             
             # Signal agent started
             await self.send_message("agent_started", {"agent_type": "html_assistant", "task": task})
-            
+
+# removed from html prompt
+# Layout:
+# Top nav:
+# - abstract logo left
+# - How it works, Book Demo, Get Early Access right
+
+
             # Build messages for HTML generation
             html_prompt = """You are an expert HTML, CSS, and JavaScript assistant. Generate clean, semantic, and functional web pages or components.
 
@@ -1367,29 +1422,79 @@ Buttons:
 Get Early Access →
 Watch the Demo
 
-Layout:
-Top nav:
-- abstract logo left
-- How it works, Book Demo, Get Early Access right
+Layout requirements:
 
-Main hero:
-- centered headline
-- centered subheadline
-- centered buttons
-- one decorative CSS-only black silicon module below the buttons
+Reset the page first: zero out body margin and padding, and apply
+border-box sizing to all elements. This is non-negotiable — without it,
+centering will be off by a few pixels and look wrong.
 
-Benefit row:
-Exactly 3 columns:
-01 Choose faster — Cut through thousands of chip options.
-02 Avoid redesigns — Pick the right part before mistakes get expensive.
-03 Understand tradeoffs — See the reasons, risks, and alternatives.
+Centering rules for every horizontally-centered section (hero, benefits,
+bottom teaser):
+- Use a flex container with align-items center and justify-content center
+as the centering mechanism. Do NOT rely on text-align alone.
+- Inside each section, wrap content in an inner container with an
+explicit max-width (around 720px for prose, 1100px for grids) and use
+margin 0 auto on that wrapper. Centering without a max-width does
+nothing — both must be present together.
+- For rows of buttons or CTAs, the row itself must be a flex container
+margin 0 auto on that wrapper. Centering without a max-width does
+nothing — both must be present together.
+- For rows of buttons or CTAs, the row itself must be a flex container
+with justify-content center and a gap between items.
 
-Bottom teaser:
-From product idea to chip recommendation
-Product idea → Chip fit analysis → Recommendation
+For the benefit row specifically: it must be a CSS grid with three equal
+columns and a shared max-width wrapper. Do not use floats, inline-block,
+or a flex row for the three columns — only grid.
+
+  For the top nav: flex with space-between, wrapped in a max-width
+  container that is itself margin 0 auto.
+
+
+
+ALLOWED SECTIONS — generate EXACTLY these four, in this order, and NOTHING ELSE:
+
+1. Top nav:
+   - text logo on the left (use the invented name "Harness")
+   - 3-4 nav links on the right: How it works, Book Demo, Get Early Access
+
+2. Main hero:
+   - centered headline (use exact copy from above)
+   - centered subheadline (use exact copy from above)
+   - centered button row with two buttons
+   - Hero ends at the button row. No decorative graphic, chip module, or visual element below the buttons.
+
+3. Benefit row — exactly 3 columns in a CSS grid:
+   01 Choose faster — Cut through thousands of chip options.
+   02 Avoid redesigns — Pick the right part before mistakes get expensive.
+   03 Understand tradeoffs — See the reasons, risks, and alternatives.
+
+   Each benefit must be a rectangular bordered card, not bare text:
+   - 1px solid border in dark gray (#222 or similar, blending with the
+     near-black background)
+   - 12px border-radius
+   - ~32px internal padding
+   - Card background slightly lighter than the page (e.g. #0a0a0a)
+   The number (01, 02, 03) sits at the top in cyan accent. The title and
+   description go below, in white and gray respectively.
+
+4. Bottom teaser:
+   Headline: "From product idea to chip recommendation"
+   A 3-card row showing the flow: Product idea → Chip fit analysis → Recommendation
+   Each card contains ONLY its name (e.g., "Product idea") with arrows between cards.
+   No descriptions, labels, sub-text, or per-card explanations.
+
+The page consists of exactly the four sections above and no others.
+After writing the bottom teaser, immediately close </body></html> and stop.
 
 Style:
-Near-black background, soft white text, electric green accent, tiny cyan details, lots of spacing, minimal glow, premium, calm, modern.
+- Background: #050505 (near-black)
+- Primary text: #f0f0f0 (soft white)
+- Subdued text: #888 (gray)
+- Primary CTA background: #00ff9d (electric green) — ONLY the main CTA button
+- Cyan #00f3ff used SPARINGLY — only tiny accents like benefit numbers (01, 02, 03)
+- Do NOT use cyan for headlines, body text, or button backgrounds.
+- Do NOT use blue, purple, yellow, orange, red, or any other primary color.
+- Generous spacing, minimal glow, premium, calm, modern.
 
 Keep the code short and simple.
 
@@ -1427,7 +1532,21 @@ Output should never exceed 450 lines or 6000 tokens. Output the complete HTML co
                 html_response = agent_llm._extract_final_channel(html_response)
             
             print(f"[Voice Session] HTML generation complete: {len(html_response)} chars")
-            
+
+            # write the html page to the workspace
+            # if html_response:
+            #     try:
+            #         workspace_dir = Path(__file__).parent / "workspace"
+            #         workspace_dir.mkdir(exist_ok=True)
+            #         slug = "".join(c if c.isalnum() else "-" for c in task.lower())[:40].strip("-") or "html"
+            #         filename = f"html_{slug}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+            #         output_path = workspace_dir / filename
+            #         output_path.write_text(html_response)
+            #         port = os.getenv("PORT", "8443")
+            #         print(f"[Voice Session] HTML written: https://localhost:{port}/workspace/{filename}")
+            #     except Exception as write_err:
+            #         print(f"[Voice Session] Failed to write HTML to workspace: {write_err}")
+
             # Signal completion
             await self.send_message("agent_html_chunk", {"content": "", "done": True})
             await self.send_message("agent_html_complete", {
@@ -1590,10 +1709,12 @@ async def voice_call(websocket: WebSocket):
     """Persistent voice call WebSocket - handles ASR, LLM, and TTS."""
     await websocket.accept()
     session = VoiceSession(websocket)
-    
+    ACTIVE_SESSIONS.append(session)
+
     print("[Voice Call] Client connected")
     try:
         await session.send_message("connected", {"status": "ready"})
+        await session.send_message("token_usage", dict(TOKEN_COUNTS))
         # Wait a moment for frontend to send initial voice selection
         await asyncio.sleep(0.2)
         # Send a short greeting (don't add to conversation history)
@@ -1906,8 +2027,11 @@ async def voice_call(websocket: WebSocket):
                                 # Use VLM for response
                                 from prompts import VIDEO_CALL_PROMPT, DEFAULT_SYSTEM_PROMPT
 
-                                # Combine personal context with video call prompt
-                                system_prompt = custom_prompt or f"{DEFAULT_SYSTEM_PROMPT}\n\n{VIDEO_CALL_PROMPT}"
+                                # Combine personal context with video call prompt.
+                                # Always append VIDEO_CALL_PROMPT so video-call-specific rules
+                                # (tools, personal context, etc.) survive a custom base prompt.
+                                base_prompt = custom_prompt or DEFAULT_SYSTEM_PROMPT
+                                system_prompt = f"{base_prompt}\n\n{VIDEO_CALL_PROMPT}"
 
                                 # Add face context to system prompt if we recognized anyone
                                 if face_context:
@@ -1972,7 +2096,7 @@ async def voice_call(websocket: WebSocket):
 
                                         if not agent_dispatched:
                                             # Inline tools: parallel exec + text-only agent loop to synthesize reply
-                                            await session.stream_tts("Looking into it.", is_transient=True)
+                                            await session.stream_tts("On it.", is_transient=True)
                                             session.conversation_history.append({
                                                 "role": "assistant", "content": None, "tool_calls": tool_calls,
                                             })
@@ -2101,6 +2225,10 @@ async def voice_call(websocket: WebSocket):
         except:
             pass
     finally:
+        try:
+            ACTIVE_SESSIONS.remove(session)
+        except ValueError:
+            pass
         print("[Voice Call] Session ended")
 
 
