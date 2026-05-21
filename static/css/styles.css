@@ -658,7 +658,8 @@
       font-size: 0.9rem;
     }
 
-    .config-section.expanded #configArrow {
+    .config-section.expanded #configArrow,
+    .config-section.expanded #tokensArrow {
       transform: rotate(180deg);
     }
 
