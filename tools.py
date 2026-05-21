@@ -658,28 +658,49 @@ async def _run_cmd(argv: List[str], timeout_s: int = 15) -> Dict[str, Any]:
     }
 
 
+# --- ORIGINAL easy-todo CLI implementation (commented out for revert) ---
+# async def _tool_add_todo(args: Dict[str, Any]) -> str:
+#     title = (args.get("title") or "").strip()
+#     if not title:
+#         return json.dumps({"error": "title required"})
+#     if not EASY_TODO_CLI.exists():
+#         return json.dumps({"error": f"easy-todo cli not found at {EASY_TODO_CLI}"})
+#     argv = ["node", str(EASY_TODO_CLI), "add", title]
+#     if args.get("due"):      argv += ["--due", str(args["due"])]
+#     if args.get("priority"): argv += ["--priority", str(args["priority"])]
+#     if args.get("notes"):    argv += ["--notes", str(args["notes"])]
+#     tags = args.get("tags")
+#     if tags:
+#         if isinstance(tags, list): tags = ",".join(str(t) for t in tags)
+#         argv += ["--tags", str(tags)]
+#     r = await _run_cmd(argv)
+#     if r.get("error"): return json.dumps(r)
+#     # Easy-todo prints "Added T<id>: <title> [priority]"
+#     return json.dumps({
+#         "ok": r["exit_code"] == 0,
+#         "message": r["stdout"] or r["stderr"],
+#         "elapsed_ms": r["elapsed_ms"],
+#     })
+
+# Simple file-backed implementation: append to workspace/personal_todos.md
+_PERSONAL_TODOS = WORKSPACE_ROOT / "workspace" / "personal_todos.md"
+
 async def _tool_add_todo(args: Dict[str, Any]) -> str:
     title = (args.get("title") or "").strip()
     if not title:
         return json.dumps({"error": "title required"})
-    if not EASY_TODO_CLI.exists():
-        return json.dumps({"error": f"easy-todo cli not found at {EASY_TODO_CLI}"})
-    argv = ["node", str(EASY_TODO_CLI), "add", title]
-    if args.get("due"):      argv += ["--due", str(args["due"])]
-    if args.get("priority"): argv += ["--priority", str(args["priority"])]
-    if args.get("notes"):    argv += ["--notes", str(args["notes"])]
-    tags = args.get("tags")
-    if tags:
-        if isinstance(tags, list): tags = ",".join(str(t) for t in tags)
-        argv += ["--tags", str(tags)]
-    r = await _run_cmd(argv)
-    if r.get("error"): return json.dumps(r)
-    # Easy-todo prints "Added T<id>: <title> [priority]"
-    return json.dumps({
-        "ok": r["exit_code"] == 0,
-        "message": r["stdout"] or r["stderr"],
-        "elapsed_ms": r["elapsed_ms"],
-    })
+    due = (args.get("due") or "").strip()
+    line = f"- [ ] {title}"
+    if due:
+        line += f" (due {due})"
+    line += "\n"
+    try:
+        _PERSONAL_TODOS.parent.mkdir(parents=True, exist_ok=True)
+        with open(_PERSONAL_TODOS, "a") as f:
+            f.write(line)
+        return json.dumps({"ok": True, "message": f"Added: {title}"})
+    except Exception as e:
+        return json.dumps({"error": f"failed to write todo: {e}"})
 
 
 async def _tool_list_todos(args: Dict[str, Any]) -> str:
