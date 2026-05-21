@@ -537,6 +537,22 @@
   <button class="toggle-log" onclick="toggleLog()">Toggle Debug Log</button>
   <div id="log"></div>
 
+  <div class="config-section">
+    <button class="config-toggle" id="tokensToggle" onclick="toggleTokens()">
+      <span>🔢 Token Usage</span>
+      <span id="tokensArrow">▼</span>
+    </button>
+    <div class="config-content" id="tokensContent" style="display: none;">
+      <div class="config-item">
+        <p style="margin: 0.25rem 0;"><strong>Web:</strong> <span id="tokensWeb">0</span></p>
+        <p style="margin: 0.25rem 0;"><strong>Discord:</strong> <span id="tokensDiscord">0</span></p>
+        <p style="margin: 0.5rem 0 0 0;"><strong>Total:</strong> <span id="tokensTotal">0</span></p>
+        <p style="margin-top: 0.75rem; font-size: 0.85rem; color: #666;">
+          <em>Sum of LLM tokens (prompt + completion) consumed by this server process since startup, across the web/voice and Discord adapters. Resets when the server restarts.</em>
+        </p>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/js/app.js"></script>
 </body>
