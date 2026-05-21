@@ -24,6 +24,11 @@ import os as _os
 from pathlib import Path as _Path
 
 
+# Demo partner: "husband" (default, Selena's demo) or "wife" (male demo).
+_PARTNER = _os.environ.get("DEMO_PARTNER", "husband").strip().lower()
+_PARTNER_PRONOUN = "him" if _PARTNER == "husband" else "her"
+
+
 # Demo-mode addendum appended when CLAW_DEMO_MODE=1.
 # Kept separate so the addition is obvious and reversible.
 DEMO_MODE_ADDENDUM = """
@@ -115,7 +120,7 @@ Answer from what you know first — only call tools when you need to act or look
 Real-world actions (todos, messaging, reminders, calendar) — tools are required because state has to change:
 - For todo operations, use the fast-path tools: add_todo, list_todos, complete_todo. They're instant.
 - For messaging, use send_telegram if a chat_id is available.
-- If the user asks to generate a webpage, use html_assistan and assume you have all the necessary context. Never ask follow-up questions.
+- If the user asks to generate a webpage, use html_assistant and assume you have all the necessary context. Never ask follow-up questions.
 - For anything else that touches my persistent state (web searches, Apple notes, cron reminders, browser automation, etc.), delegate to ask_claw — it's slower (~2-3 s) but covers every skill you don't have a fast-path for.
 - You and "ask_claw" are both parts of the same assistant. Never tell the user "I can't do that" before trying ask_claw.
 - Only call a tool by emitting a real tool_calls block. NEVER invent markdown-style fences like <tool_code>, ```tool_code, or pseudo-JSON in your visible reply — those are not tool calls, they are text the user will hear read aloud. If a tool you need is not currently available, just say so plainly in one short sentence.
@@ -136,7 +141,13 @@ Behavior rules:
 Style: calm, direct, a little playful. Prioritize brevity.""" + _load_claw_persona() + _maybe_demo_suffix()
 
 # Video Call specific prompt (even more focused)
-VIDEO_CALL_PROMPT = """You are on a live video call. You can see the user. Respond ONLY to what they ask.
+VIDEO_CALL_PROMPT = f"""You are on a live video call. You can see the user. Respond ONLY to what they ask.
+
+HIGH-PRIORITY PERSONAL CONTEXT (overrides tool-call urges):
+- {_PARTNER.capitalize()} prefers new/unique gifts, not repeats.
+- Already gave {_PARTNER} pineapple cakes from Taipei last year — do NOT add a todo or suggest them again.
+- If the user asks to buy / add a todo for pineapple cakes for {_PARTNER}, DO NOT call add_todo. Instead reply in one short sentence: "You got {_PARTNER_PRONOUN} that last year — want me to add high mountain oolong tea instead?"
+- Only proceed (call add_todo with high mountain oolong tea) after the user confirms.
 
 RULES:
 - Answer ONLY the specific question asked
@@ -146,13 +157,16 @@ RULES:
 - If user says "okay", "thanks", "got it" - just acknowledge briefly
 
 You have access to tools:
+- add_todo / list_todos / complete_todo: fast-path personal todo list. Use for any todo add/list/complete request.
+- send_telegram: send a message via Telegram (requires chat_id).
+- ask_claw: fallback for any action not covered above (web search, notes, reminders, browser).
 - reasoning_assistant: ONLY for customer data, feature requests, prioritization, roadmap questions. Has LOCAL DATA FILES you cannot see.
-- markdown_assistant: Use when asked to "document this", "create notes", or write markdown
-- html_assistant: Use when asked to "build a webpage", "create HTML", "design a UI"
+- markdown_assistant: Use when asked to "document this", "create notes", or write markdown.
+- html_assistant: Use when asked to "build a webpage", "create HTML", "design a UI".
 
 WHEN TO USE reasoning_assistant (ONLY these cases):
 - "What are customers asking for?" → YES
-- "What should we build?" → YES  
+- "What should we build?" → YES
 - "Prioritize features" → YES
 - "Cross-reference my roadmap with feedback" → YES
 
