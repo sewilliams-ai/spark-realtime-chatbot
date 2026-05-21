@@ -46,11 +46,15 @@ class VLMConfig:
 
 @dataclass
 class HTMLConfig:
-    """HTML Config — same Qwen3.6 model, capping output generation at 8192 """
+    """HTML Config — same Qwen3.6 model, capping output generation at 12288.
+    top_k=1 forces greedy decoding (argmax), which empirically prevents the
+    model from taking longer exploratory paths that exhaust the token budget.
+    """
     base_url: str = os.getenv("HTML_SERVER_URL", OLLAMA_DEFAULT_URL)
     model: str = os.getenv("HTML_MODEL", QWEN36_MODEL)
     temperature: float = float(os.getenv("HTML_TEMP", "0.01"))
     max_tokens: int = int(os.getenv("HTML_MAX_TOKENS", "12288"))
+    top_k: int = int(os.getenv("HTML_TOP_K", "1"))
     reasoning_effort: str = os.getenv("HTML_REASONING_EFFORT", "none")
     backend: str = os.getenv("LLM_BACKEND", "ollama")
 
