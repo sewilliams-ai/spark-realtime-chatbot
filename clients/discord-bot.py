@@ -7,8 +7,11 @@ from pathlib import Path
 
 import discord
 import requests
+import urllib3
 from PIL import Image
 from faster_whisper import WhisperModel
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Make the project root importable so we can pull in tools.py from clients/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -22,6 +25,7 @@ TOKEN = os.environ['DISCORD_BOT_TOKEN']
 # APPLICATION_URL = 'https://discord.com/oauth2/authorize?client_id=1506326445692026920&permissions=8&integration_type=0&scope=bot' # this link adds the bot to a server
 INFERENCE_URL = 'http://localhost:30000/v1/chat/completions'
 MODEL_NAME = 'Qwen 3.6 35B A3B'
+TOKEN_USAGE_URL = os.environ.get('TOKEN_USAGE_URL', 'https://localhost:8443/api/token_usage')
 
 WRITE_FILE_TOOL = ALL_TOOLS["write_file"]
 
@@ -136,6 +140,19 @@ async def on_message(message):
             print(f"--- [error] {e}")
             await message.channel.send(f"Sorry, I couldn't reach my local AI backend ({e}).")
             return
+
+        usage = data.get("usage") or {}
+        print(f"--- [usage from llama.cpp] {usage}")
+        if usage:
+            try:
+                r = requests.post(TOKEN_USAGE_URL, json={
+                    "source": "discord",
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get("completion_tokens", 0),
+                }, timeout=2, verify=False)
+                print(f"--- [token_usage push] status={r.status_code} body={r.text[:200]}")
+            except Exception as e:
+                print(f"--- [token_usage push failed] {e}")
 
         finish_reason = data["choices"][0].get("finish_reason")
         content = msg.get("content") or ""
