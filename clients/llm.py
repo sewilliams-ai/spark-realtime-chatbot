@@ -12,6 +12,31 @@ from config import LLMConfig, ReasoningConfig
 from .http_session import get_http_manager
 
 
+# Hook invoked whenever the LLM backend returns a `usage` dict.
+# server.py registers a handler at startup; default is a no-op so the
+# client stays usable standalone (e.g. from tests).
+_usage_hook = None
+
+def set_usage_hook(fn):
+    """Register a callable invoked as fn(source: str, usage: dict).
+    `usage` has keys prompt_tokens / completion_tokens / total_tokens.
+    """
+    global _usage_hook
+    _usage_hook = fn
+
+def _fire_usage(usage):
+    if not isinstance(usage, dict):
+        return
+    print(f"[LLM] usage received: {usage}")
+    if _usage_hook:
+        try:
+            _usage_hook("web", usage)
+        except Exception as e:
+            print(f"[LLM] usage hook error: {e}")
+    else:
+        print("[LLM] usage hook NOT registered — token counter won't update")
+
+
 class LlamaCppClient:
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
@@ -46,6 +71,7 @@ class LlamaCppClient:
         async with session.post(self.cfg.base_url, json=payload) as resp:
             data = await resp.json()
 
+        _fire_usage(data.get("usage"))
         raw = data["choices"][0]["message"]["content"]
         return self._extract_final_channel(raw)
 
@@ -63,10 +89,15 @@ class LlamaCppClient:
             "temperature": self.cfg.temperature,
             "max_tokens": self.cfg.max_tokens,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         # Only add reasoning_effort if it's not "off"
         if self.cfg.reasoning_effort and self.cfg.reasoning_effort.lower() != "off":
             payload["reasoning_effort"] = self.cfg.reasoning_effort.lower()
+        # top_k only set when a config explicitly provides it (HTMLConfig does;
+        # LLMConfig/VLMConfig don't, so their behavior is unchanged).
+        if hasattr(self.cfg, "top_k") and self.cfg.top_k is not None:
+            payload["top_k"] = self.cfg.top_k
         
         # Add tools if provided (OpenAI format)
         if tools:
@@ -149,7 +180,9 @@ class LlamaCppClient:
                                 # Handle empty choices array
                                 choices = data.get("choices", [])
                                 if not choices:
-                                    # Skip chunks with empty choices (can happen with some backends)
+                                    # Final usage chunk (when stream_options.include_usage=true)
+                                    # comes through with choices=[] and a top-level usage dict.
+                                    _fire_usage(data.get("usage"))
                                     continue
                                 
                                 choice = choices[0]
