@@ -894,6 +894,24 @@ class VoiceSession:
             t0 = asyncio.get_event_loop().time()
             content = await execute_tool(name, args)
             elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
+
+            # edit_html: broadcast updated HTML to the iframe; strip from LLM-bound result to save context.
+            # await.send_message updates the live rendering in the iframe (the live html viewer rendered by html_assistant)
+            # and result.pop("html", None) removes the html from the LLM tool calling history to save context
+            # ^ that's rlly important b/c a 10k tok web generation would bloat most of the 16k LLM context window
+            if name == "edit_html":
+                try:
+                    result = json.loads(content)
+                    if "html" in result:
+                        await self.send_message("agent_html_complete", {
+                            "task": "edit landing page",
+                            "html": result["html"],
+                        })
+                        result.pop("html", None)
+                        content = json.dumps(result)
+                except json.JSONDecodeError:
+                    pass
+
             print(f"[Voice Session]   ← {name} in {elapsed_ms:.0f}ms ({len(content)} chars)")
             return {
                 "tool_call_id": tool_id, "role": "tool", "name": name, "content": content,
@@ -1461,19 +1479,16 @@ CRITICAL INSTRUCTIONS:
             
             print(f"[Voice Session] HTML generation complete: {len(html_response)} chars")
 
-            # write the html page to the workspace
-            # if html_response:
-            #     try:
-            #         workspace_dir = Path(__file__).parent / "workspace"
-            #         workspace_dir.mkdir(exist_ok=True)
-            #         slug = "".join(c if c.isalnum() else "-" for c in task.lower())[:40].strip("-") or "html"
-            #         filename = f"html_{slug}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-            #         output_path = workspace_dir / filename
-            #         output_path.write_text(html_response)
-            #         port = os.getenv("PORT", "8443")
-            #         print(f"[Voice Session] HTML written: https://localhost:{port}/workspace/{filename}")
-            #     except Exception as write_err:
-            #         print(f"[Voice Session] Failed to write HTML to workspace: {write_err}")
+            # save the html file to workspace/landing.html and serve at https://localhost:{port}/workspace/landing.html
+            if html_response:
+                try:
+                    output_path = Path(__file__).parent / "workspace" / "landing.html"
+                    output_path.parent.mkdir(exist_ok=True)
+                    output_path.write_text(html_response)
+                    port = os.getenv("PORT", "8443")
+                    print(f"[Voice Session] HTML written: https://localhost:{port}/workspace/landing.html")
+                except Exception as write_err:
+                    print(f"[Voice Session] Failed to write HTML to workspace: {write_err}")
 
             # Signal completion
             await self.send_message("agent_html_chunk", {"content": "", "done": True})
