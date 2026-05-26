@@ -8,6 +8,7 @@ Run: python3 bench/test_agent_loop.py
 """
 import asyncio
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -17,8 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tools import execute_tool, ALL_TOOLS  # noqa: E402
 
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
-MODEL = "qwen3.6:35b-a3b"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/v1/chat/completions")
+MODEL = os.getenv("MODEL", "qwen3.6:35b-a3b")
 
 
 def _post(payload, timeout=60):
@@ -31,13 +32,14 @@ def _post(payload, timeout=60):
         return json.loads(r.read())
 
 
-async def run_agent(user_msg, enabled_tool_names, max_iter=4):
+async def run_agent(user_msg, enabled_tool_names, max_iter=4, system_prompt=None):
     tools = [ALL_TOOLS[n] for n in enabled_tool_names]
     messages = [
-        {"role": "system", "content": "You are a helpful assistant with tools. Use them when useful. Answer briefly."},
+        {"role": "system", "content": system_prompt or "You are a helpful assistant with tools. Use them when useful. Answer briefly."},
         {"role": "user", "content": user_msg},
     ]
     timings = []
+    tools_called = []
     for i in range(max_iter):
         t0 = time.perf_counter()
         resp = _post({
@@ -56,7 +58,7 @@ async def run_agent(user_msg, enabled_tool_names, max_iter=4):
         timings.append({"iter": i + 1, "llm_ms": round(elapsed, 1), "tool_calls": len(tool_calls), "content_chars": len(content)})
         print(f"  iter {i+1}: llm={elapsed:.0f}ms, tool_calls={len(tool_calls)}, content={len(content)}ch")
         if not tool_calls:
-            return {"final": content, "iters": i + 1, "timings": timings}
+            return {"final": content, "iters": i + 1, "timings": timings, "tools_called": tools_called}
         # Append assistant turn
         messages.append({"role": "assistant", "content": None, "tool_calls": tool_calls})
         # Execute tools in parallel
@@ -71,11 +73,12 @@ async def run_agent(user_msg, enabled_tool_names, max_iter=4):
             return tc, name, result, (time.perf_counter() - t0) * 1000
         executed = await asyncio.gather(*[_run(tc) for tc in tool_calls])
         for tc, name, result, ms in executed:
+            tools_called.append(name)
             print(f"    tool {name}: {ms:.0f}ms, {len(result)}ch")
             messages.append({
                 "role": "tool", "tool_call_id": tc["id"], "name": name, "content": result,
             })
-    return {"final": "[hit max_iter]", "iters": max_iter, "timings": timings}
+    return {"final": "[hit max_iter]", "iters": max_iter, "timings": timings, "tools_called": tools_called}
 
 
 async def main():
@@ -96,6 +99,58 @@ async def main():
         print(f"  final ({r['iters']} iter, {total_ms:.0f}ms): {r['final'][:200]}")
         if not r["final"] or r["final"] == "[hit max_iter]":
             all_ok = False
+
+    # ---- edit_html: model must pick edit_html, not html_assistant ----
+    from prompts import VIDEO_CALL_PROMPT
+    from bs4 import BeautifulSoup
+
+    def _struct_signature(html_str):
+        """Sorted tuple of tag names — a pure text edit must not change this."""
+        return tuple(sorted(t.name for t in BeautifulSoup(html_str, "html.parser").find_all()))
+
+    sample_landing = (
+        "<!DOCTYPE html>\n<html><head><title>ChipSelect</title></head><body>\n"
+        '  <h1>The Chip Selector Harness</h1>\n'
+        '  <p class="tagline">Smart chip selection for rapid prototyping</p>\n'
+        '  <p class="subtitle">Now available</p>\n'
+        '  <button class="cta">Start Building</button>\n'
+        '  <span class="price">$29/month</span>\n'
+        "</body></html>\n"
+    )
+    edit_cases = [
+        ("headline", "Update my product landing page headline to say 'the chip harness for rapid prototype development'", "the chip harness for rapid prototype development"),
+        ("CTA",      "Change the call-to-action button on my landing page to say 'Get Started Now'",                     "Get Started Now"),
+        ("tagline",  "Update the tagline on my landing page to 'Built for engineers'",                                    "Built for engineers"),
+        ("subtitle", "Change the subtitle on my landing page to 'Now in beta'",                                           "Now in beta"),
+        ("pricing",  "Update the price on my landing page to '$49/month'",                                                "$49/month"),
+    ]
+    landing_path = Path(__file__).resolve().parent.parent / "workspace" / "landing.html"
+    print("\n\n=== edit_html agent loop ===")
+    edit_results = []
+    before_sig = _struct_signature(sample_landing)
+    for title, prompt, expected_text in edit_cases:
+        landing_path.parent.mkdir(exist_ok=True)
+        landing_path.write_text(sample_landing)
+        print(f"\n--- {title} ---")
+        t0 = time.perf_counter()
+        r = await run_agent(prompt, ["read_file", "edit_html", "html_assistant"], system_prompt=VIDEO_CALL_PROMPT)
+        total_ms = (time.perf_counter() - t0) * 1000
+        called = r.get("tools_called", [])
+        final_html = landing_path.read_text() if landing_path.exists() else ""
+        after_sig = _struct_signature(final_html)
+        struct_ok = (before_sig == after_sig)
+        ok = ("edit_html" in called) and ("html_assistant" not in called) and (expected_text in final_html) and struct_ok
+        status = "PASS" if ok else "FAIL"
+        print(f"  [{status}] {title} ({total_ms:.0f}ms) tools={called} text_in_file={expected_text in final_html} struct_unchanged={struct_ok}")
+        if not struct_ok:
+            print(f"    before tags: {before_sig}")
+            print(f"    after  tags: {after_sig}")
+        edit_results.append(ok)
+    edit_pass = sum(1 for r in edit_results if r)
+    print(f"\n  edit_html suite: {edit_pass}/{len(edit_results)} passed")
+    if edit_pass != len(edit_results):
+        all_ok = False
+
     print("\n" + ("OK" if all_ok else "FAIL"))
     sys.exit(0 if all_ok else 1)
 
