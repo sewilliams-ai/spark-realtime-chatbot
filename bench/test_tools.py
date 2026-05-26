@@ -53,6 +53,18 @@ async def main():
     results.append(await check("recall_fact", {}, ["facts"]))
     # web_search: optional network, don't fail hard
     await check("web_search", {"query": "DGX Spark", "max_results": 3}, ["results"])
+
+    # edit_html: seed landing.html, then exercise happy + error paths.
+    landing = Path(__file__).resolve().parent.parent / "workspace" / "landing.html"
+    landing.parent.mkdir(exist_ok=True)
+    landing.write_text("<html><body><h1>Old Headline</h1><p>Once.</p></body></html>")
+    results.append(await check("edit_html", {"old_text": "Old Headline", "new_text": "New Headline"}, ["status", "html"]))
+    results.append(await check("edit_html", {"old_text": "nope", "new_text": "x"}, expect_ok=False))
+    landing.write_text("<html><body><p>dup</p><p>dup</p></body></html>")
+    results.append(await check("edit_html", {"old_text": "dup", "new_text": "x"}, expect_ok=False))
+    landing.unlink()
+    results.append(await check("edit_html", {"old_text": "x", "new_text": "y"}, expect_ok=False))
+
     # agent tool sentinels
     results.append(await check("markdown_assistant", {"task": "x"}, ["agent_type", "status"]))
     results.append(await check("reasoning_assistant", {"problem": "x"}, ["agent_type", "status"]))
