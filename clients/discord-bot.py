@@ -28,6 +28,8 @@ MODEL_NAME = 'Qwen 3.6 35B A3B'
 TOKEN_USAGE_URL = os.environ.get('TOKEN_USAGE_URL', 'https://localhost:8443/api/token_usage')
 
 WRITE_FILE_TOOL = ALL_TOOLS["write_file"]
+READ_FILE_TOOL  = ALL_TOOLS["read_file"]
+EDIT_HTML_TOOL  = ALL_TOOLS["edit_html"]
 
 ORCHESTRATOR_PROMPT = """You are Claw, my personal AI assistant — a helpful lobster 🦞 — running fully on NVIDIA DGX Spark. 
 You handle two kinds of requests. Pick exactly one mode per turn based on the user's message.
@@ -77,6 +79,21 @@ Rules:
 - In your chat response, say ONE short sentence acknowledging the request (e.g. "On it - drafting that now.").
 - Do NOT include the email body in the chat response.
 
+=== MODE C: EDIT HTML PAGE ===
+Trigger: user asks to update, edit, change, or fix an HTML page (headline, button, tagline, subtitle, price, etc.).
+
+Rules:
+- First call read_file with the page's path (default "workspace/landing.html"; if the user names a different page like "about.html", use "workspace/about.html") to see the current HTML.
+- Then call edit_html with the exact old_text from the file and the new_text the user requested. Only set filename if the user named a non-default page.
+- In your chat response, say ONE short sentence acknowledging the change (e.g. "Done - the headline is now X.").
+- Do NOT call write_file. Do NOT regenerate the whole page.
+
+GOOD EXAMPLE:
+- User: "update the landing page headline to say 'The chip harness for fast prototyping'"
+  -> read_file({"path": "workspace/landing.html"})
+  -> edit_html({"old_text": "<current headline from the file>", "new_text": "The chip harness for fast prototyping"})
+  -> "Done - the headline is now 'The chip harness for fast prototyping.'"
+
 === FALLBACK ===
 For any other request, respond briefly as a helpful assistant. Do not use tools.
 """
@@ -124,7 +141,7 @@ async def on_message(message):
                 {"role": "system", "content": ORCHESTRATOR_PROMPT},
                 {"role": "user", "content": parts},
             ],
-            "tools": [WRITE_FILE_TOOL],
+            "tools": [WRITE_FILE_TOOL, READ_FILE_TOOL, EDIT_HTML_TOOL],
             "max_tokens": 512,
             "stream": False,
             "cache_prompt": True,
