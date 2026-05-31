@@ -135,64 +135,88 @@ async def on_message(message):
         parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
     async with message.channel.typing():
-        payload = {
-            "model": MODEL_NAME,
-            "messages": [
-                {"role": "system", "content": ORCHESTRATOR_PROMPT},
-                {"role": "user", "content": parts},
-            ],
-            "tools": [WRITE_FILE_TOOL, READ_FILE_TOOL, EDIT_HTML_TOOL],
-            "max_tokens": 512,
-            "stream": False,
-            "cache_prompt": True,
-        }
-
+        messages = [
+            {"role": "system", "content": ORCHESTRATOR_PROMPT},
+            {"role": "user", "content": parts},
+        ]
         print(f"\n--- [user] {user_query!r}  (images: {sum(1 for p in parts if p.get('type')=='image_url')})")
-        try:
-            response = requests.post(INFERENCE_URL, json=payload, timeout=120)
-            response.raise_for_status()
-            data = response.json()
-            msg = data["choices"][0]["message"]
-        except Exception as e:
-            print(f"--- [error] {e}")
-            await message.channel.send(f"Sorry, I couldn't reach my local AI backend ({e}).")
-            return
 
-        usage = data.get("usage") or {}
-        print(f"--- [usage from llama.cpp] {usage}")
-        if usage:
+        MAX_TOOL_ITERS = 4
+        sent_anything = False
+        ran_a_tool = False
+        for _ in range(MAX_TOOL_ITERS):
+            payload = {
+                "model": MODEL_NAME,
+                "messages": messages,
+                "tools": [WRITE_FILE_TOOL, READ_FILE_TOOL, EDIT_HTML_TOOL],
+                "max_tokens": 512,
+                "stream": False,
+                "cache_prompt": True,
+            }
             try:
-                r = requests.post(TOKEN_USAGE_URL, json={
-                    "source": "discord",
-                    "prompt_tokens": usage.get("prompt_tokens", 0),
-                    "completion_tokens": usage.get("completion_tokens", 0),
-                }, timeout=2, verify=False)
-                print(f"--- [token_usage push] status={r.status_code} body={r.text[:200]}")
+                response = requests.post(INFERENCE_URL, json=payload, timeout=120)
+                response.raise_for_status()
+                data = response.json()
+                msg = data["choices"][0]["message"]
             except Exception as e:
-                print(f"--- [token_usage push failed] {e}")
+                print(f"--- [error] {e}")
+                await message.channel.send(f"Sorry, I couldn't reach my local AI backend ({e}).")
+                return
 
-        finish_reason = data["choices"][0].get("finish_reason")
-        content = msg.get("content") or ""
-        tool_calls = msg.get("tool_calls") or []
-        print(f"--- [model] finish={finish_reason}  content={content!r}")
-        if tool_calls:
-            print(f"--- [model] tool_calls={[(tc['function']['name'], tc['function']['arguments'][:120]) for tc in tool_calls]}")
+            usage = data.get("usage") or {}
+            print(f"--- [usage from llama.cpp] {usage}")
+            if usage:
+                try:
+                    r = requests.post(TOKEN_USAGE_URL, json={
+                        "source": "discord",
+                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage.get("completion_tokens", 0),
+                    }, timeout=2, verify=False)
+                    print(f"--- [token_usage push] status={r.status_code} body={r.text[:200]}")
+                except Exception as e:
+                    print(f"--- [token_usage push failed] {e}")
 
-        # Send the model's chat text (or a fallback ack if it skipped the preamble)
-        if content:
-            for i in range(0, len(content), 2000):
-                await message.channel.send(content[i:i+2000])
-        elif tool_calls:
-            await message.channel.send("On it - drafting now.")
+            content = msg.get("content") or ""
+            tool_calls = msg.get("tool_calls") or []
+            print(f"--- [model] finish={data['choices'][0].get('finish_reason')}  content={content!r}")
+            if tool_calls:
+                print(f"--- [model] tool_calls={[(tc['function']['name'], tc['function']['arguments'][:120]) for tc in tool_calls]}")
 
-        # Execute any tool calls and emit a confirmation per result
-        for tc in tool_calls:
-            name = tc["function"]["name"]
-            args = json.loads(tc["function"]["arguments"])
-            result = json.loads(await _INLINE_DISPATCH[name](args))
-            if result.get("ok"):
-                await message.channel.send(f"Saved to `{result['path']}`")
-            else:
-                await message.channel.send(f"Tool error: {result.get('error', 'unknown')}")
+            # Surface the model's chat text
+            if content:
+                sent_anything = True
+                for i in range(0, len(content), 2000):
+                    await message.channel.send(content[i:i+2000])
+
+            # No tools requested -> the model is done
+            if not tool_calls:
+                break
+
+            # Feed the assistant turn + each tool result back for the next iteration
+            ran_a_tool = True
+            messages.append({"role": "assistant", "content": content or None, "tool_calls": tool_calls})
+            for tc in tool_calls:
+                name = tc["function"]["name"]
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    args = {}
+                result = await _INLINE_DISPATCH[name](args)  # JSON string
+                try:
+                    err = json.loads(result).get("error")
+                except json.JSONDecodeError:
+                    err = None
+                if err:
+                    await message.channel.send(f"Tool error: {err}")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "name": name,
+                    "content": result,
+                })
+
+        # Fallback: we did work but the model never produced a closing sentence
+        if ran_a_tool and not sent_anything:
+            await message.channel.send("Done.")
 
 client.run(TOKEN)
