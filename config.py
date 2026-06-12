@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-# Unified endpoint — one Qwen3.6-35B-A3B served by Ollama handles text, vision, and reasoning.
-OLLAMA_DEFAULT_URL = "http://localhost:11434/v1/chat/completions"
-QWEN36_MODEL = "qwen3.6:35b-a3b"
+# Unified endpoint — one Qwen3.6-35B-A3B served by llama.cpp handles text, vision, and reasoning.
+LLM_DEFAULT_URL = "http://localhost:30000/v1/chat/completions"
+QWEN36_MODEL = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
 
 
 @dataclass
@@ -24,20 +24,20 @@ class ASRConfig:
 
 @dataclass
 class LLMConfig:
-    """Language Model configuration (Qwen3.6-35B-A3B via Ollama, OpenAI-compatible)."""
-    base_url: str = os.getenv("LLM_SERVER_URL", OLLAMA_DEFAULT_URL)
+    """Language Model configuration (Qwen3.6-35B-A3B via llama.cpp, OpenAI-compatible)."""
+    base_url: str = os.getenv("LLM_SERVER_URL", LLM_DEFAULT_URL)
     model: str = os.getenv("LLM_MODEL", QWEN36_MODEL)
     temperature: float = float(os.getenv("LLM_TEMP", "0.7"))
     max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "4096"))
-    # "none" disables <think> on Ollama → voice-path TTFT ~200ms. Set "high" for reasoning tasks.
+    # "none" disables <think> → voice-path TTFT ~200ms. Set "high" for reasoning tasks.
     reasoning_effort: str = os.getenv("LLM_REASONING_EFFORT", "none")
-    backend: str = os.getenv("LLM_BACKEND", "ollama")
+    backend: str = os.getenv("LLM_BACKEND", "llamacpp")
 
 
 @dataclass
 class VLMConfig:
     """Vision Language Model configuration — same Qwen3.6 endpoint, vision is native."""
-    base_url: str = os.getenv("VLM_SERVER_URL", OLLAMA_DEFAULT_URL)
+    base_url: str = os.getenv("VLM_SERVER_URL", LLM_DEFAULT_URL)
     model: str = os.getenv("VLM_MODEL", QWEN36_MODEL)
     temperature: float = float(os.getenv("VLM_TEMP", "0.3"))
     max_tokens: int = int(os.getenv("VLM_MAX_TOKENS", "4000"))
@@ -50,18 +50,18 @@ class HTMLConfig:
     top_k=1 forces greedy decoding (argmax), which empirically prevents the
     model from taking longer exploratory paths that exhaust the token budget.
     """
-    base_url: str = os.getenv("HTML_SERVER_URL", OLLAMA_DEFAULT_URL)
+    base_url: str = os.getenv("HTML_SERVER_URL", LLM_DEFAULT_URL)
     model: str = os.getenv("HTML_MODEL", QWEN36_MODEL)
     temperature: float = float(os.getenv("HTML_TEMP", "0.01"))
     max_tokens: int = int(os.getenv("HTML_MAX_TOKENS", "12288"))
     top_k: int = int(os.getenv("HTML_TOP_K", "1"))
     reasoning_effort: str = os.getenv("HTML_REASONING_EFFORT", "none")
-    backend: str = os.getenv("LLM_BACKEND", "ollama")
+    backend: str = os.getenv("LLM_BACKEND", "llamacpp")
 
 @dataclass
 class ReasoningConfig:
     """Deep-reasoning configuration — same Qwen3.6 model, reasoning_effort=high."""
-    base_url: str = os.getenv("REASONING_SERVER_URL", OLLAMA_DEFAULT_URL)
+    base_url: str = os.getenv("REASONING_SERVER_URL", LLM_DEFAULT_URL)
     model: str = os.getenv("REASONING_MODEL", QWEN36_MODEL)
     temperature: float = float(os.getenv("REASONING_TEMP", "0.7"))
     max_tokens: int = int(os.getenv("REASONING_MAX_TOKENS", "4096"))

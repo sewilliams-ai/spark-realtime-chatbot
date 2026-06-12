@@ -45,14 +45,18 @@ Visit https://github.com/ggml-org/llama.cpp and follow the README and `docs/` fo
 
 ### Start the llama.cpp server with Qwen3.6 and speculative decoding
 
-> Note: the paths to each model file may differ on your machine — adjust the absolute paths below to match your local cache.
+`hf download` prints the local cache path for each file, so capture those into variables instead of hardcoding snapshot-hash paths (the hash changes whenever a model is re-downloaded). If a file is already downloaded, this just prints its path — no re-download.
 
 ```bash
+MODEL=$(hf download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf)
+MMPROJ=$(hf download unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf)
+DRAFT=$(hf download unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q4_K_M.gguf)
+
 cd ~/llama.cpp && \
 ./build/bin/llama-server \
-  --model /home/nvidia/.cache/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-GGUF/snapshots/a483e9e6cbd595906af30beda3187c2663a1118c/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
-  --mmproj /home/nvidia/.cache/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-GGUF/snapshots/a483e9e6cbd595906af30beda3187c2663a1118c/mmproj-BF16.gguf \
-  -md /home/nvidia/.cache/huggingface/hub/models--unsloth--Qwen3.5-0.8B-GGUF/snapshots/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf \
+  --model "$MODEL" \
+  --mmproj "$MMPROJ" \
+  -md "$DRAFT" \
   --spec-draft-ngl 99 \
   --spec-draft-n-max 16 \
   --spec-draft-n-min 0 \
@@ -65,35 +69,31 @@ cd ~/llama.cpp && \
   --threads 8
 ```
 
+> **Important: keep `--ctx-size` at 16384 or higher.** The html_assistant needs ≥16k of context; llama.cpp's default (4096) silently truncates long prompts and destabilizes generation.
+
 ---
 
 ## Part 2. Set up the demo repo and run the HTTPS server
 
-### Clone the demo repo and check out the `computex` branch
+### Clone the demo repo and install dependencies
 
 ```bash
 git clone https://github.com/sewilliams-ai/spark-realtime-chatbot.git
 cd spark-realtime-chatbot
-git fetch origin
-git switch computex
+python3 -m venv venv && source venv/bin/activate
+./setup.sh   # builds CUDA-enabled CTranslate2 (for local ASR) + installs requirements
 ```
 
-### Launch the HTTPS server pointed at the llama.cpp backend
+### Launch the HTTPS server
 
-Uses CLI env vars instead of editing the launch script.
+The defaults in `launch-https.sh` and `config.py` already point at the llama.cpp backend (`localhost:30000`, `Qwen3.6-35B-A3B-UD-Q4_K_M.gguf`), so no environment variables are needed.
 
 ```bash
 source venv/bin/activate && \
-LLM_SERVER_URL=http://localhost:30000/v1/chat/completions \
-VLM_SERVER_URL=http://localhost:30000/v1/chat/completions \
-REASONING_SERVER_URL=http://localhost:30000/v1/chat/completions \
-HTML_SERVER_URL=http://localhost:30000/v1/chat/completions \
-LLM_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
-VLM_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
-HTML_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
-REASONING_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
 ./launch-https.sh --local-asr
 ```
+
+Then open **https://localhost:8443**, accept the self-signed certificate, and allow the microphone.
 
 ---
 
@@ -174,4 +174,26 @@ vllm serve nvidia/Qwen3.6-35B-A3B-2.06GB-per-token \
     --reasoning-parser qwen3 \
     --compilation-config '{"pass_config":{"fuse_norm_quant":true,"fuse_act_quant":true,"fuse_attn_quant":false}}' \
     --speculative-config '{"method":"mtp","num_speculative_tokens":3,"rejection_sample_method":"synthetic","synthetic_acceptance_length":3.12,"moe_backend":"triton"}'
+```
+
+---
+
+## Appendix: Running via Ollama instead of llama.cpp
+
+Ollama is the simplest backend to stand up — no building from source, no manual GGUF paths — but it does not use the tuned speculative-decoding config above. Since the defaults now expect llama.cpp on `:30000`, point the app at Ollama's `:11434` with env vars.
+
+```bash
+# Install Ollama (if needed): https://ollama.com/download
+ollama pull qwen3.6:35b-a3b
+ollama serve   # serves http://localhost:11434
+
+# Launch the frontend pointed at Ollama:
+source venv/bin/activate && \
+LLM_SERVER_URL=http://localhost:11434/v1/chat/completions \
+VLM_SERVER_URL=http://localhost:11434/v1/chat/completions \
+REASONING_SERVER_URL=http://localhost:11434/v1/chat/completions \
+HTML_SERVER_URL=http://localhost:11434/v1/chat/completions \
+LLM_MODEL=qwen3.6:35b-a3b VLM_MODEL=qwen3.6:35b-a3b \
+HTML_MODEL=qwen3.6:35b-a3b REASONING_MODEL=qwen3.6:35b-a3b \
+./launch-https.sh --local-asr
 ```

@@ -1,8 +1,8 @@
 # =============================================================================
 # spark-realtime-chatbot Dockerfile for DGX Spark (CUDA 13.0 / GB10)
 # =============================================================================
-# LLM + VLM + reasoning all served by Ollama (Qwen3.6-35B-A3B) on the host at
-# :11434. This container only runs the FastAPI orchestrator, ASR (faster-whisper
+# LLM + VLM + reasoning all served by llama.cpp (Qwen3.6-35B-A3B) on the host at
+# :30000. This container only runs the FastAPI orchestrator, ASR (faster-whisper
 # via CTranslate2 built from source for GB10 sm_121), TTS (Kokoro), and face
 # recognition (DeepFace).
 #
@@ -206,16 +206,16 @@ ENV PORT=8443 \
     KOKORO_VOICE=af_bella \
     KOKORO_SPEED=1.2 \
     TTS_OVERLAP=true \
-    # LLM / VLM / reasoning all point at host Ollama (use --net host)
-    LLM_SERVER_URL=http://localhost:11434/v1/chat/completions \
-    LLM_MODEL=qwen3.6:35b-a3b \
+    # LLM / VLM / reasoning all point at host llama.cpp (use --net host)
+    LLM_SERVER_URL=http://localhost:30000/v1/chat/completions \
+    LLM_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
     LLM_MAX_TOKENS=4096 \
     LLM_REASONING_EFFORT=none \
-    VLM_SERVER_URL=http://localhost:11434/v1/chat/completions \
-    VLM_MODEL=qwen3.6:35b-a3b \
+    VLM_SERVER_URL=http://localhost:30000/v1/chat/completions \
+    VLM_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
     VLM_REASONING_EFFORT=none \
-    REASONING_SERVER_URL=http://localhost:11434/v1/chat/completions \
-    REASONING_MODEL=qwen3.6:35b-a3b \
+    REASONING_SERVER_URL=http://localhost:30000/v1/chat/completions \
+    REASONING_MODEL=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
     REASONING_EFFORT=high \
     # HuggingFace cache
     HF_HOME=/root/.cache/huggingface

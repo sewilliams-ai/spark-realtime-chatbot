@@ -7,11 +7,11 @@ A voice + vision AI assistant running locally on DGX Spark — streaming speech 
 **Highlights**
 - **Single joint model**: Qwen3.6-35B-A3B handles text, vision, and reasoning (no separate VLM/reasoner)
 - **Ultra-low latency**: ~300ms voice turns, ~900ms video turns (warm, GB10)
-- **Fully local**: Ollama on host, Whisper ASR, Kokoro TTS — no cloud dependencies
+- **Fully local**: llama.cpp on host, Whisper ASR, Kokoro TTS — no cloud dependencies
 - **Agentic**: streaming multi-turn tool-call loop (filesystem, Python sandbox, web search, memory)
 - **Face recognition**: DeepFace enrollment + identification in video-call mode
 
-**Benchmarked on DGX Spark (warm, Q4_K_M Qwen3.6-35B-A3B via Ollama, N=5)**
+**Benchmarked on DGX Spark (warm, Q4_K_M Qwen3.6-35B-A3B via llama.cpp, N=5)**
 
 | Path | TTFT (median) | End-to-end (median) |
 |------|---------------|---------------------|
@@ -71,43 +71,53 @@ docker run --rm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=6710886
 
 ## Quick Start
 
-### 1. Serve Qwen3.6 with Ollama
+Two processes run side by side: a **llama.cpp** model server (`:30000`) and the **HTTPS frontend** (`:8443`); a **Discord bot** is optional. This is the condensed path — for the full walkthrough (building llama.cpp, Discord bot setup, vLLM alternative), see **[docs/setup-guide.md](docs/setup-guide.md)**.
+
+### 1. Serve Qwen3.6 with llama.cpp
+
+Build [llama.cpp](https://github.com/ggml-org/llama.cpp) from source, then download the GGUF models and start `llama-server` with speculative decoding. `hf download` prints each file's cache path, so we capture it instead of hardcoding snapshot paths.
 
 ```bash
-# Install Ollama (if needed): https://ollama.com/download
-ollama pull qwen3.6:35b-a3b
-ollama serve  # runs on http://localhost:11434
+MODEL=$(hf download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf)
+MMPROJ=$(hf download unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf)
+DRAFT=$(hf download unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q4_K_M.gguf)
+
+~/llama.cpp/build/bin/llama-server \
+  --model "$MODEL" --mmproj "$MMPROJ" -md "$DRAFT" \
+  --host 0.0.0.0 --port 30000 --n-gpu-layers 99 --ctx-size 16384 \
+  --spec-draft-ngl 99 --spec-draft-n-max 16 --spec-draft-n-min 0 --spec-draft-p-min 0.75 \
+  --chat-template-kwargs '{"enable_thinking": false}' --threads 8
 ```
+
+> **Keep `--ctx-size` ≥ 16384** — the html_assistant needs it; llama.cpp's 4096 default silently truncates.
 
 Sanity check:
 ```bash
-curl -s http://localhost:11434/v1/chat/completions \
+curl -s http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen3.6:35b-a3b","messages":[{"role":"user","content":"hi"}],"max_tokens":20,"reasoning_effort":"none"}' | jq .
+  -d '{"model":"Qwen3.6-35B-A3B-UD-Q4_K_M.gguf","messages":[{"role":"user","content":"hi"}],"max_tokens":20,"reasoning_effort":"none"}' | jq .
 ```
 
-### 2. Run the chatbot (Docker)
+### 2. Run the HTTPS frontend
 
 ```bash
-git clone https://github.com/kedarpotdar-nv/spark-realtime-chatbot
+git clone https://github.com/sewilliams-ai/spark-realtime-chatbot.git
 cd spark-realtime-chatbot
-docker build -t spark-realtime-chatbot .
-docker run --gpus all --net host -it --init \
-    -v ~/.cache/huggingface:/root/.cache/huggingface \
-    spark-realtime-chatbot
-```
-
-Ollama is reached at `host.docker.internal:11434` (or `localhost:11434` with `--net host`).
-
-### 3. Run the chatbot (Python, dev mode)
-
-```bash
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+python3 -m venv venv && source venv/bin/activate
+./setup.sh                    # CUDA CTranslate2 (local ASR) + requirements
 ./launch-https.sh --local-asr
 ```
 
-Open **https://localhost:8443**. Accept the self-signed cert and allow the microphone.
+Defaults already point at the llama.cpp backend on `:30000`, so **no environment variables are needed**. Open **https://localhost:8443**, accept the self-signed cert, and allow the microphone.
+
+### 3. (Optional) Discord bot
+
+```bash
+export DISCORD_BOT_TOKEN=<your-bot-token>
+source venv/bin/activate && python3 clients/discord-bot.py
+```
+
+See [docs/setup-guide.md](docs/setup-guide.md) for creating your own bot.
 
 ---
 
@@ -117,8 +127,8 @@ All defaults live in `config.py` and can be overridden via environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_SERVER_URL` | `http://localhost:11434/v1/chat/completions` | OpenAI-compatible endpoint |
-| `LLM_MODEL` | `qwen3.6:35b-a3b` | Same model for text + vision |
+| `LLM_SERVER_URL` | `http://localhost:30000/v1/chat/completions` | OpenAI-compatible endpoint (llama.cpp) |
+| `LLM_MODEL` | `Qwen3.6-35B-A3B-UD-Q4_K_M.gguf` | Same model for text + vision |
 | `LLM_REASONING_EFFORT` | `none` | `none` / `low` / `high` — `none` gates out `<think>` on the voice path |
 | `VLM_SERVER_URL` / `VLM_MODEL` | same as LLM | Vision shares the model |
 | `REASONING_EFFORT` | `high` | For the deep-reasoning agent tool only |
@@ -126,7 +136,7 @@ All defaults live in `config.py` and can be overridden via environment variables
 | `ASR_MODEL` | `Systran/faster-whisper-small.en` | Whisper model |
 | `KOKORO_VOICE` | `af_bella` | TTS voice (Kokoro only) |
 | `TTS_ENGINE` | `kokoro` | `kokoro` (default) or `chatterbox` (experimental; see bench above) |
-| `TTS_DEVICE` | `cpu` | `cuda` or `cpu`. Kokoro CUDA blocked on Blackwell; Chatterbox CUDA works. |
+| `TTS_DEVICE` | `cuda` | `cuda` (default, ~70× realtime on GB10 with torch cu130) or `cpu` |
 | `TTS_OVERLAP` | `false` | Start TTS while LLM still streaming |
 
 ---
@@ -134,7 +144,7 @@ All defaults live in `config.py` and can be overridden via environment variables
 ## Architecture
 
 ```
-Browser ──► FastAPI (server.py) ──► Ollama :11434  (Qwen3.6-35B-A3B)
+Browser ──► FastAPI (server.py) ──► llama.cpp :30000  (Qwen3.6-35B-A3B)
                 │
                 ├── ASR      (faster-whisper, local or API)
                 ├── TTS      (Kokoro)
@@ -176,7 +186,7 @@ Key files:
 
 ## Acknowledgements
 
-- [Ollama](https://ollama.com/) — local model serving
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) — local model serving
 - [Qwen3.6](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) — joint VL + reasoning (Alibaba)
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — ASR
 - [Kokoro](https://github.com/hexgrad/kokoro) — TTS

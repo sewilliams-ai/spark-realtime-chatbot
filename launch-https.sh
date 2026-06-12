@@ -9,25 +9,25 @@ export ASR_MODEL="${ASR_MODEL:-Systran/faster-whisper-small.en}"
 export ASR_DEVICE="${ASR_DEVICE:-cuda}"
 export ASR_COMPUTE_TYPE="${ASR_COMPUTE_TYPE:-float16}"
 
-# Unified model — Qwen3.6-35B-A3B (vision + text + reasoning) served by Ollama
-export LLM_SERVER_URL="${LLM_SERVER_URL:-http://localhost:11434/v1/chat/completions}"
-export LLM_MODEL="${LLM_MODEL:-qwen3.6:35b-a3b}"
+# Unified model — Qwen3.6-35B-A3B (vision + text + reasoning) served by llama.cpp on :30000
+export LLM_SERVER_URL="${LLM_SERVER_URL:-http://localhost:30000/v1/chat/completions}"
+export LLM_MODEL="${LLM_MODEL:-Qwen3.6-35B-A3B-UD-Q4_K_M.gguf}"
 export LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-4096}"
 export LLM_REASONING_EFFORT="${LLM_REASONING_EFFORT:-none}"  # "none" = no <think>, fastest voice path
 
 # VLM shares the same endpoint and model
-export VLM_SERVER_URL="${VLM_SERVER_URL:-http://localhost:11434/v1/chat/completions}"
-export VLM_MODEL="${VLM_MODEL:-qwen3.6:35b-a3b}"
+export VLM_SERVER_URL="${VLM_SERVER_URL:-http://localhost:30000/v1/chat/completions}"
+export VLM_MODEL="${VLM_MODEL:-Qwen3.6-35B-A3B-UD-Q4_K_M.gguf}"
 export VLM_MAX_TOKENS="${VLM_MAX_TOKENS:-150}"
 export VLM_REASONING_EFFORT="${VLM_REASONING_EFFORT:-none}"
 
 # Deep-reasoning agent uses the same model with reasoning_effort=high
-export REASONING_SERVER_URL="${REASONING_SERVER_URL:-http://localhost:11434/v1/chat/completions}"
-export REASONING_MODEL="${REASONING_MODEL:-qwen3.6:35b-a3b}"
+export REASONING_SERVER_URL="${REASONING_SERVER_URL:-http://localhost:30000/v1/chat/completions}"
+export REASONING_MODEL="${REASONING_MODEL:-Qwen3.6-35B-A3B-UD-Q4_K_M.gguf}"
 export REASONING_EFFORT="${REASONING_EFFORT:-high}"
 
-export HTML_SERVER_URL="${HTML_SERVER_URL:-http://localhost:11434/v1/chat/completions}"
-export HTML_MODEL="${HTML_MODEL:-qwen3.6:35b-a3b}"
+export HTML_SERVER_URL="${HTML_SERVER_URL:-http://localhost:30000/v1/chat/completions}"
+export HTML_MODEL="${HTML_MODEL:-Qwen3.6-35B-A3B-UD-Q4_K_M.gguf}"
 export HTML_MAX_TOKENS="${HTML_MAX_TOKENS:-12288}"
 export HTML_REASONING_EFFORT="${HTML_REASONING_EFFORT:-none}"
 
