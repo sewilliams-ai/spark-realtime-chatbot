@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Spark Realtime Chatbot</title>
+  <title>Claw Live</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -11,7 +11,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.7/dist/bundle.min.js"></script>
-  <link rel="stylesheet" href="/static/css/styles.css?v=rear-camera-unmirror">
+  <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
 
@@ -65,8 +65,9 @@
     <div class="main-content">
       <div class="content-wrapper">
         <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.25rem;">
-          <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="toggleMobileSidebar()" aria-label="Open menu">☰</button>
-          <h1 style="margin: 0;">🎤 Spark Realtime Chatbot</h1>
+          <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="toggleMobileSidebar()" aria-label="Chats">☰</button>
+          <button class="mobile-tools-btn" id="mobileToolsBtn" onclick="openMobileTools()" aria-label="Tools &amp; settings">⚙️</button>
+          <h1 style="margin: 0;">🦞 Claw Live</h1>
         </div>
 
   <div class="controls">
@@ -147,9 +148,6 @@
         </button>
         <button class="video-call-btn camera" id="videoCallCameraBtn" onclick="toggleVideoCallCamera()" title="Camera">
           📷
-        </button>
-        <button class="video-call-btn" id="videoCallFlipCameraBtn" onclick="flipVideoCallCamera()" title="Flip camera" style="background: #6c5ce7;">
-          🔄
         </button>
         <button class="video-call-btn" id="videoCallSettingsBtn" onclick="toggleVideoCallSettings()" title="Settings" style="background: #0984e3;">
           ⚙️
@@ -265,22 +263,75 @@
       </div>
 
       <div class="config-item" style="margin-top: 1.5rem;">
+        <label style="display: block; margin-bottom: 0.75rem; font-weight: 600;"><strong>Tools:</strong></label>
+        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolReadFile" value="read_file" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>📄 read_file</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolWriteFile" value="write_file" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>💾 write_file</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolListFiles" value="list_files" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>📁 list_files</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolRunPython" value="run_python" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>🐍 run_python</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolWebSearch" value="web_search" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>🔎 web_search</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolRemember" value="remember_fact" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>🧠 remember_fact</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolRecall" value="recall_fact" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>🗂️ recall_fact</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolAddTodo" value="add_todo" style="width: 18px; height: 18px; cursor: pointer;" checked>
+            <span>✅ add_todo <span style="font-size: 0.75rem; color: #76b900;">(Claw fast path)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolListTodos" value="list_todos" style="width: 18px; height: 18px; cursor: pointer;" checked>
+            <span>📋 list_todos <span style="font-size: 0.75rem; color: #76b900;">(Claw fast path)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolCompleteTodo" value="complete_todo" style="width: 18px; height: 18px; cursor: pointer;" checked>
+            <span>☑️ complete_todo <span style="font-size: 0.75rem; color: #76b900;">(Claw fast path)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolSendTelegram" value="send_telegram" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>✈️ send_telegram <span style="font-size: 0.75rem; color: #76b900;">(Claw fast path)</span></span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="toolAskClaw" value="ask_claw" style="width: 18px; height: 18px; cursor: pointer;">
+            <span>🦞 ask_claw <span style="font-size: 0.75rem; color: #888;">(Claw fallback — slower)</span></span>
+          </label>
+        </div>
+        <p style="margin-top: 0.75rem; font-size: 0.85rem; color: #666;">
+          <em>Inline tools the assistant can call mid-conversation. Fast-path Claw tools run in ~30 ms; ask_claw goes through a full Claw agent turn (~20 s).</em>
+        </p>
+      </div>
+
+      <div class="config-item" style="margin-top: 1.5rem;">
         <label style="display: block; margin-bottom: 0.75rem; font-weight: 600;"><strong>Agents:</strong> <span style="font-size: 0.75rem; color: #e67e22; font-weight: normal;">(Beta)</span></label>
         <div style="display: flex; flex-direction: column; gap: 0.75rem;">
           <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
             <input type="checkbox" id="agentReasoningAssistant" value="reasoning_assistant" style="width: 18px; height: 18px; cursor: pointer;">
-            <span>🧠 Reasoning Assistant <span style="font-size: 0.75rem; color: #76b900;">(Nemotron)</span></span>
+            <span>🧠 Reasoning Assistant <span style="font-size: 0.75rem; color: #76b900;">(Qwen3.6)</span></span>
           </label>
           <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
-            <input type="checkbox" id="agentMarkdownAssistant" value="markdown_assistant" checked style="width: 18px; height: 18px; cursor: pointer;">
+            <input type="checkbox" id="agentMarkdownAssistant" value="markdown_assistant" style="width: 18px; height: 18px; cursor: pointer;">
             <span>📝 Markdown Assistant</span>
           </label>
           <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
-            <input type="checkbox" id="agentWorkspaceUpdateAssistant" value="workspace_update_assistant" checked style="width: 18px; height: 18px; cursor: pointer;">
-            <span>🗂️ Workspace Update Assistant</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: normal;">
-            <input type="checkbox" id="agentHtmlAssistant" value="html_assistant" style="width: 18px; height: 18px; cursor: pointer;">
+            <input type="checkbox" id="agentHtmlAssistant" value="html_assistant" checked style="width: 18px; height: 18px; cursor: pointer;">
             <span>🌐 HTML Assistant</span>
           </label>
         </div>
@@ -422,7 +473,7 @@
     <div style="background: white; border-radius: 12px; height: 100%; display: flex; flex-direction: column; max-width: 1200px; margin: 0 auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
       <div style="padding: 1.5rem; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; background: linear-gradient(to right, #76b900, #4a7c00); color: white; border-radius: 12px 12px 0 0;">
         <div>
-          <h2 style="margin: 0; font-size: 1.5rem;">🧠 Reasoning Assistant <span style="font-size: 0.85rem; opacity: 0.9;">(Nemotron)</span></h2>
+          <h2 style="margin: 0; font-size: 1.5rem;">🧠 Reasoning Assistant <span style="font-size: 0.85rem; opacity: 0.9;">(Qwen3.6)</span></h2>
           <p style="margin: 0.5rem 0 0 0; opacity: 0.9; font-size: 0.9rem;" id="reasoningTaskDescription">Analyzing...</p>
         </div>
         <div style="display: flex; gap: 0.5rem;">
@@ -457,7 +508,7 @@
         <div style="display: flex; gap: 0.5rem; align-items: center;">
           <div id="reasoningStatus" style="display: flex; align-items: center; gap: 0.5rem;">
             <span style="width: 8px; height: 8px; background: #76b900; border-radius: 50%; animation: pulse 2s infinite;"></span>
-            <span style="color: #666;">Nemotron is thinking...</span>
+            <span style="color: #666;">Qwen3.6 is thinking...</span>
           </div>
         </div>
       </div>
@@ -486,7 +537,21 @@
   <button class="toggle-log" onclick="toggleLog()">Toggle Debug Log</button>
   <div id="log"></div>
 
+  <div class="config-section">
+    <button class="config-toggle" id="tokensToggle" onclick="toggleTokens()">
+      <span>🔢 Token Usage</span>
+      <span id="tokensArrow">▼</span>
+    </button>
+    <div class="config-content" id="tokensContent" style="display: none;">
+      <div class="config-item">
+        <p style="margin: 0.25rem 0;"><strong>Total:</strong> <strong id="tokensTotal">0</strong></p>
+        <p style="margin-top: 0.75rem; font-size: 0.85rem; color: #666;">
+          <em>Sum of LLM tokens (prompt + completion) consumed by this server process since startup, across the web/voice and Discord adapters. Resets when the server restarts.</em>
+        </p>
+      </div>
+    </div>
+  </div>
 
-  <script src="/static/js/app.js?v=beat4-workspace-routing"></script>
+  <script src="/static/js/app.js"></script>
 </body>
 </html>

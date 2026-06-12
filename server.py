@@ -12,6 +12,7 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -23,7 +24,7 @@ from starlette.websockets import WebSocketState
 
 # Local modules
 from config import (
-    ASRConfig, LLMConfig, VLMConfig, NemotronConfig, TTSConfig,
+    ASRConfig, LLMConfig, VLMConfig, TTSConfig, ReasoningConfig, HTMLConfig,
     AUDIO_DIR, STATIC_DIR, SAMPLE_RATE, WORKSPACE_ROOT, FFMPEG_PATH
 )
 from audio import check_ffmpeg_available, decode_webm_bytes_to_pcm_f32
@@ -33,13 +34,57 @@ from clients import (
     create_asr,
     LlamaCppClient,
     VLMClient,
-    NemotronClient,
-    KokoroTTS,
+    ReasoningClient,
+    create_tts,
 )
 from clients.http_session import set_http_manager
+from clients.llm import set_usage_hook
 
 # Import system prompt
 from prompts import DEFAULT_SYSTEM_PROMPT
+
+
+# ─── html_assistant system prompt ────────────────────────────────────────
+# Assembled once at import from three sources:
+#   1. _HTML_ROLE       — generic assistant role + brevity (lives in code)
+#   2. style_preferences/frontend_style_preferences.md — generic style guide
+#   3. projects/<x>.md  — project-specific copy + sections
+# Order is generic→specific so llama-server can prefix-cache the first two
+# halves across runs (and across projects, if the style guide is shared).
+_HTML_ROLE = """You are an expert HTML, CSS, and JavaScript assistant. Generate clean, semantic, and functional web pages or components.
+
+Keep the code short and simple.
+
+Output should never exceed 450 lines or 6000 tokens. Output the complete HTML code."""
+
+_HERE = Path(__file__).parent
+HTML_PROMPT = "\n\n".join([
+    _HTML_ROLE,
+    (_HERE / "demo_files" / "style_preferences" / "frontend_style_preferences.md").read_text(encoding="utf-8").strip(),
+    (_HERE / "demo_files" / "projects" / "chip_selector_harness.md").read_text(encoding="utf-8").strip(),
+])
+
+
+def _safely_spoken_flag(blob) -> bool:
+    """True if a tool result JSON has {"spoken": true}.
+    Used by the agent loop to know whether ask_claw already streamed its
+    reply directly to TTS so the LLM follow-up should be brief.
+    """
+    try:
+        return bool(json.loads(blob or "{}").get("spoken"))
+    except Exception:
+        return False
+
+
+# In CLAW_DEMO_MODE, strip ask_claw from the tools list — the prompt already
+# tells the model to affirm action-asks confidently, but removing the tool
+# from the array entirely prevents the model from routing around the prompt
+# by calling ask_claw (which is honest about what's wired and would break
+# the demo theatre).
+def _filter_for_demo(tool_defs):
+    if os.environ.get("CLAW_DEMO_MODE", "").lower() not in ("1", "true", "yes", "on"):
+        return tool_defs
+    return [t for t in tool_defs if t.get("function", {}).get("name") != "ask_claw"]
 
 
 # -----------------------------
@@ -49,7 +94,7 @@ from prompts import DEFAULT_SYSTEM_PROMPT
 # Global models (initialized at startup)
 asr = None  # FasterWhisperASR or LocalWhisperASR based on ASR_MODE
 llm: LlamaCppClient = None
-tts: KokoroTTS = None
+tts = None  # KokoroTTS or ChatterboxTTS, selected via TTSConfig.engine
 
 # Conversation history (in-memory, per-session could be added later)
 conversation_history: List[Dict[str, str]] = [
@@ -87,7 +132,8 @@ async def lifespan(app: FastAPI):
     if hasattr(asr, 'warmup'):
         asr.warmup()
     llm = LlamaCppClient(LLMConfig())
-    tts = KokoroTTS(TTSConfig())
+    tts = create_tts(TTSConfig())
+    set_usage_hook(record_usage)
     yield
     # Cleanup: close shared HTTP session
     if http_manager:
@@ -114,6 +160,7 @@ app = FastAPI(title="Voice Chat (Streaming)", lifespan=lifespan)
 # Serve static files (frontend)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
+app.mount("/workspace", StaticFiles(directory=str(Path(__file__).parent / "workspace")), name="workspace")
 
 
 # -----------------------------
@@ -124,6 +171,50 @@ app.mount("/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 async def health_check():
     """Health check endpoint for Docker."""
     return {"status": "ok"}
+
+
+# -----------------------------
+# Token counter (sums LLM usage across web + discord adapters).
+# Resets on server restart. Discord posts deltas to /api/token_usage.
+# -----------------------------
+
+TOKEN_COUNTS: Dict[str, int] = {"web": 0, "discord": 0}
+ACTIVE_SESSIONS: List["VoiceSession"] = []
+
+
+async def broadcast_token_usage():
+    """Push current TOKEN_COUNTS to every connected browser session."""
+    for s in list(ACTIVE_SESSIONS):
+        await s.send_message("token_usage", dict(TOKEN_COUNTS))
+
+
+async def record_usage(source: str, usage: Dict[str, Any]):
+    """Hook fired from clients/llm.py when an LLM `usage` dict arrives.
+    Awaited inline with the LLM stream so the broadcast lands while the
+    WS is still alive (the WS often closes immediately after the stream ends).
+    """
+    if source not in TOKEN_COUNTS:
+        print(f"[token_usage] unknown source '{source}', dropping {usage}")
+        return
+    delta = int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
+    TOKEN_COUNTS[source] += delta
+    print(f"[token_usage] +{delta} {source} → {TOKEN_COUNTS} (active sessions: {len(ACTIVE_SESSIONS)})")
+    await broadcast_token_usage()
+
+
+@app.post("/api/token_usage")
+async def ingest_token_usage(request: Request):
+    """Discord adapter posts {source, prompt_tokens, completion_tokens} here."""
+    payload = await request.json()
+    source = payload.get("source", "discord")
+    print(f"[token_usage] POST received: {payload}")
+    if source not in TOKEN_COUNTS:
+        return {"ok": False, "error": f"unknown source: {source}"}
+    delta = int(payload.get("prompt_tokens", 0)) + int(payload.get("completion_tokens", 0))
+    TOKEN_COUNTS[source] += delta
+    print(f"[token_usage] +{delta} {source} → {TOKEN_COUNTS} (active sessions: {len(ACTIVE_SESSIONS)})")
+    await broadcast_token_usage()
+    return {"ok": True, "counts": dict(TOKEN_COUNTS)}
 
 
 @app.get("/api/default_prompt")
@@ -219,11 +310,22 @@ async def delete_face(name: str):
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    """Serve the frontend HTML."""
+    """Serve the frontend HTML with per-file cache-busters.
+
+    Appends ?v=<mtime> to /static/css/styles.css and /static/js/app.js so
+    any edit to those files invalidates the phone's cached copy on next
+    page load — no more 'hard refresh' gymnastics.
+    """
     index_path = STATIC_DIR / "index.html"
-    if index_path.exists():
-        return index_path.read_text()
-    return HTMLResponse("<h1>Frontend not found. Please create static/index.html</h1>")
+    if not index_path.exists():
+        return HTMLResponse("<h1>Frontend not found. Please create static/index.html</h1>")
+    html = index_path.read_text()
+    for rel in ("css/styles.css", "js/app.js"):
+        asset_path = STATIC_DIR / rel
+        if asset_path.exists():
+            v = int(asset_path.stat().st_mtime)
+            html = html.replace(f"/static/{rel}", f"/static/{rel}?v={v}")
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 # -----------------------------
@@ -239,9 +341,17 @@ class VoiceSession:
         self.asr_last_text = ""
         self.is_recording = False
         self.audio_context_initialized = False
+        # Last camera frame seen in video-call mode (base64 JPEG, no data: prefix).
+        # ask_claw uses this to pass the actual pixels to Claw, so Claw's own
+        # VLM can reason on the image instead of just realtime2's description.
+        self.last_camera_frame_b64: Optional[str] = None
+        # Claw barge-in tracking. Set while a streaming ask_claw turn is in flight
+        # so user speech / disconnect can cancel it.
+        self._claw_in_flight: bool = False
+        self._claw_bridge_ref = None  # the ClawAcp singleton, set when streaming starts
         self.selected_voice = os.getenv("KOKORO_VOICE", "af_bella")  # Default voice
         self.enabled_tools = []  # Default: no tools enabled
-        
+
         # Import system prompt from prompts.py
         from prompts import DEFAULT_SYSTEM_PROMPT
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
@@ -252,21 +362,47 @@ class VoiceSession:
                 "content": self.system_prompt,
             }
         ]
+        # Once set, every streaming loop should bail out of its LLM read.
+        # Set by send_message/send_audio_chunk when the WS is gone.
+        self._ws_closed: bool = False
+
+    async def cancel_claw_in_flight(self) -> None:
+        """Cancel any in-flight Claw streaming turn (barge-in / user spoke again)."""
+        if not self._claw_in_flight:
+            return
+        bridge = self._claw_bridge_ref
+        if bridge is None:
+            return
+        try:
+            print("[Voice Session] barge-in: cancelling in-flight Claw turn")
+            await bridge.cancel()
+        except Exception as e:
+            print(f"[Voice Session] cancel_claw_in_flight failed: {e}")
+
+    @property
+    def alive(self) -> bool:
+        """Fast check: can we still send to the client?"""
+        return (not self._ws_closed) and (self.websocket.client_state == WebSocketState.CONNECTED)
 
     async def send_message(self, msg_type: str, data: Dict[str, Any] = None):
         """Send a JSON message to the client."""
+        if self._ws_closed:
+            return False  # silent after the first detection — no log spam
         try:
             # Check if WebSocket is still connected
             if self.websocket.client_state != WebSocketState.CONNECTED:
-                print(f"[Voice Session] Cannot send message '{msg_type}': WebSocket not connected (state: {self.websocket.client_state})")
+                if not self._ws_closed:
+                    print(f"[Voice Session] WS closed while sending '{msg_type}' (state: {self.websocket.client_state})")
+                self._ws_closed = True
                 return False
-            
+
             payload = {"type": msg_type}
             if data:
                 payload.update(data)
             await self.websocket.send_json(payload)
             return True
         except (WebSocketDisconnect, Exception) as e:
+            self._ws_closed = True
             # Handle WebSocket disconnection gracefully
             error_type = type(e).__name__
             if "Disconnect" in error_type or "ConnectionClosed" in error_type or "ClientDisconnected" in error_type:
@@ -277,15 +413,18 @@ class VoiceSession:
 
     async def send_audio_chunk(self, audio_data: bytes):
         """Send binary audio chunk to the client."""
+        if self._ws_closed:
+            return False
         try:
             # Check if WebSocket is still connected
             if self.websocket.client_state != WebSocketState.CONNECTED:
-                print(f"[Voice Session] Cannot send audio chunk: WebSocket not connected (state: {self.websocket.client_state})")
+                self._ws_closed = True
                 return False
-            
+
             await self.websocket.send_bytes(audio_data)
             return True
         except (WebSocketDisconnect, Exception) as e:
+            self._ws_closed = True
             # Handle WebSocket disconnection gracefully
             error_type = type(e).__name__
             if "Disconnect" in error_type or "ConnectionClosed" in error_type or "ClientDisconnected" in error_type:
@@ -435,6 +574,10 @@ class VoiceSession:
         text = text.replace("<|channel|>final<|message|>", "")
         text = text.replace("<|end|>", "")
         text = text.replace("<|start|>assistant", "")
+        # Strip hallucinated Gemini-style tool-call fences so they don't get read aloud.
+        import re as _re
+        text = _re.sub(r"<tool_code>[\s\S]*?</tool_code>", "", text)
+        text = _re.sub(r"```(?:tool_code|tool_call|json)?\s*\{[\s\S]*?\}\s*```", "", text)
         text = text.strip()
         
         if not text:
@@ -592,6 +735,9 @@ class VoiceSession:
 
         try:
             async for chunk in llm.stream_complete(messages, tools=tools):
+                if not self.alive:
+                    print(f"[TTS Pipeline] client disconnected mid-stream, aborting LLM read")
+                    break
                 if chunk.startswith("data: "):
                     try:
                         data = json.loads(chunk[6:])
@@ -645,6 +791,115 @@ class VoiceSession:
             await tts_task
             raise
 
+    # Multi-turn tool-call loop cap. Each iteration = one LLM stream that may
+    # end with another round of tool calls. Inline tools feed results back
+    # into the model; agent tools short-circuit to their UI handlers.
+    MAX_TOOL_ITERATIONS = 4
+
+    async def _execute_tool_calls_parallel(self, tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Execute tool calls concurrently. Returns OpenAI-format tool_result messages.
+
+        Special-cases ask_claw: instead of awaiting the whole reply, opens an
+        ACP stream and pipes Claw's chunks straight into progressive TTS in
+        real time. The user hears Claw speak directly as the agent generates,
+        not after a full silent wait. The tool result is still appended to
+        history so the LLM follow-up can do its own short narration if needed.
+        """
+        async def _run_streaming_claw(tc):
+            tool_id = tc.get("id", "")
+            fn = tc.get("function", {}) or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            message = (args.get("message") or "").strip()
+            if not message:
+                return {"tool_call_id": tool_id, "role": "tool", "name": "ask_claw",
+                        "content": json.dumps({"error": "empty message"})}
+            t0 = asyncio.get_event_loop().time()
+            try:
+                # Lazy import — claw_acp lives in clients/ but we bypass __init__
+                claw_acp = sys.modules.get("clients.claw_acp")
+                if claw_acp is None:
+                    import importlib.util as _ilu
+                    _spec = _ilu.spec_from_file_location(
+                        "clients.claw_acp",
+                        str(Path(__file__).parent / "clients" / "claw_acp.py"),
+                    )
+                    claw_acp = _ilu.module_from_spec(_spec)
+                    sys.modules["clients.claw_acp"] = claw_acp
+                    _spec.loader.exec_module(claw_acp)
+                bridge = await claw_acp.get_singleton()
+                # Mark in-flight so barge-in / disconnect can cancel us
+                self._claw_in_flight = True
+                self._claw_bridge_ref = bridge
+                full = []
+                buf = ""
+                spoke = False
+                # Pass the latest camera frame to Claw if we have one — Claw's
+                # own VLM then reasons on the actual pixels instead of
+                # realtime2's word-description of the scene.
+                image_b64 = self.last_camera_frame_b64
+                async for chunk in bridge.prompt(message, image_b64=image_b64, timeout_s=120.0):
+                    if not self.alive:
+                        await bridge.cancel()
+                        break
+                    full.append(chunk)
+                    buf += chunk
+                    sentences, buf = self._extract_complete_sentences(buf)
+                    for s in sentences:
+                        s = s.strip()
+                        if s:
+                            await self.stream_tts(s)
+                            spoke = True
+                # flush trailing fragment
+                tail = buf.strip()
+                if tail and self.alive:
+                    await self.stream_tts(tail)
+                    spoke = True
+                elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
+                reply_text = "".join(full).strip()
+                print(f"[Voice Session]   ← ask_claw streamed in {elapsed_ms:.0f}ms ({len(reply_text)} chars, spoke={spoke})")
+                # Mark the tool result so the agent loop's LLM follow-up knows
+                # it should NOT re-narrate (we already spoke). The 'spoken' key
+                # is consumed by the upstream loop to skip its own TTS.
+                return {
+                    "tool_call_id": tool_id, "role": "tool", "name": "ask_claw",
+                    "content": json.dumps({
+                        "reply": reply_text or "(no reply)",
+                        "elapsed_ms": round(elapsed_ms, 1),
+                        "transport": "acp-streamed",
+                        "spoken": spoke,
+                    }),
+                }
+            except Exception as e:
+                print(f"[Voice Session] ask_claw streaming failed: {e}; falling back to buffered")
+                content = await execute_tool("ask_claw", args)
+                return {"tool_call_id": tool_id, "role": "tool", "name": "ask_claw", "content": content}
+            finally:
+                self._claw_in_flight = False
+                self._claw_bridge_ref = None
+
+        async def _run(tc):
+            fn = tc.get("function", {}) or {}
+            if fn.get("name") == "ask_claw":
+                return await _run_streaming_claw(tc)
+            tool_id = tc.get("id", "")
+            name = fn.get("name", "")
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            print(f"[Voice Session]   → parallel tool: {name}({list(args.keys())})")
+            t0 = asyncio.get_event_loop().time()
+            content = await execute_tool(name, args)
+            elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
+            print(f"[Voice Session]   ← {name} in {elapsed_ms:.0f}ms ({len(content)} chars)")
+            return {
+                "tool_call_id": tool_id, "role": "tool", "name": name, "content": content,
+            }
+        return await asyncio.gather(*[_run(tc) for tc in tool_calls])
+
     async def process_user_message(self, user_text: str):
         """Process user message through LLM pipeline."""
         if not user_text or not user_text.strip():
@@ -662,7 +917,7 @@ class VoiceSession:
         raw_chunks = []
         try:
             # Get enabled tools for this session
-            enabled_tool_defs = get_enabled_tools(self.enabled_tools)
+            enabled_tool_defs = _filter_for_demo(get_enabled_tools(self.enabled_tools))
             print(f"[Voice Session] Starting LLM stream with {len(messages_for_llm)} messages")
             print(f"[Voice Session] Enabled tools: {self.enabled_tools} -> {[t['function']['name'] for t in enabled_tool_defs]}")
 
@@ -692,9 +947,12 @@ class VoiceSession:
                 print(f"[Voice Session] Overlap pipeline returned empty response, continuing...")
 
             async for chunk in llm.stream_complete(messages_for_llm, tools=enabled_tool_defs if enabled_tool_defs else None):
+                if not self.alive:
+                    print(f"[Voice Session] client disconnected mid-stream, aborting main LLM read")
+                    return
                 chunk_count += 1
                 raw_chunks.append(chunk[:100])  # Store first 100 chars for debugging
-                
+
                 if chunk.startswith("data: "):
                     try:
                         data = json.loads(chunk[6:])
@@ -710,7 +968,7 @@ class VoiceSession:
                             is_agent_tool = False
                             for tc in tool_calls:
                                 func = tc.get("function", {})
-                                if func.get("name") in ["markdown_assistant", "reasoning_assistant", "workspace_update_assistant"]:
+                                if func.get("name") in ["markdown_assistant", "reasoning_assistant"]:
                                     is_agent_tool = True
                                     break
                             
@@ -719,9 +977,6 @@ class VoiceSession:
                                 for tc in tool_calls:
                                     if tc.get("function", {}).get("name") == "reasoning_assistant":
                                         feedback_msg = "Let me think through this..."
-                                        break
-                                    if tc.get("function", {}).get("name") == "workspace_update_assistant":
-                                        feedback_msg = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
                                         break
                                 else:
                                     feedback_msg = "On it."
@@ -742,78 +997,115 @@ class VoiceSession:
                             self.conversation_history.append(assistant_message)
                             print(f"[Voice Session] Added assistant message with {len(tool_calls)} tool call(s) to history")
                             
-                            # Execute each tool call
-                            tool_results = []
-                            for tool_call in tool_calls:
-                                tool_id = tool_call.get("id", "")
-                                function = tool_call.get("function", {})
-                                tool_name = function.get("name", "")
-                                arguments_str = function.get("arguments", "{}")
-                                
+                            # Execute all tool calls in parallel
+                            tool_results = await self._execute_tool_calls_parallel(tool_calls)
+
+                            # Emit UI signals for any agent-type tools
+                            for tr in tool_results:
                                 try:
-                                    arguments = json.loads(arguments_str)
-                                except json.JSONDecodeError:
-                                    arguments = {}
-                                
-                                print(f"[Voice Session] Executing tool: {tool_name} with args: {arguments}")
-                                
-                                # Execute tool
-                                tool_result = await execute_tool(tool_name, arguments)
-                                print(f"[Voice Session] Tool '{tool_name}' returned: {tool_result[:100]}...")
-                                
-                                # Check if this is an agent tool that needs special handling
-                                try:
-                                    tool_result_data = json.loads(tool_result)
-                                    if tool_result_data.get("agent_type"):
-                                        # This is an agent tool - send signal to open UI
+                                    d = json.loads(tr.get("content", "{}"))
+                                    if d.get("agent_type"):
                                         await self.send_message("agent_started", {
-                                            "agent_type": tool_result_data.get("agent_type"),
-                                            "task": tool_result_data.get("task", ""),
-                                            "codebase_path": tool_result_data.get("codebase_path", "")
+                                            "agent_type": d.get("agent_type"),
+                                            "task": d.get("task", ""),
+                                            "codebase_path": d.get("codebase_path", "")
                                         })
-                                        print(f"[Voice Session] Agent '{tool_result_data.get('agent_type')}' started - UI should open")
+                                        print(f"[Voice Session] Agent '{d.get('agent_type')}' started - UI should open")
                                 except json.JSONDecodeError:
-                                    pass  # Not JSON, treat as regular tool result
-                                
-                                tool_results.append({
-                                    "tool_call_id": tool_id,
-                                    "role": "tool",
-                                    "name": tool_name,
-                                    "content": tool_result
-                                })
-                            
-                            # Add tool results to conversation history (after assistant message with tool_calls)
+                                    pass
+
+                            # Append to conversation history (after assistant message with tool_calls)
                             for tool_result in tool_results:
                                 self.conversation_history.append(tool_result)
                             print(f"[Voice Session] Added {len(tool_results)} tool result(s) to history")
-                            
-                            # Get final response from LLM with tool results
-                            print(f"[Voice Session] Getting final response after tool execution")
-                            followup_messages = list(self.conversation_history)
-                            
-                            # Stream final response
+
+                            # Multi-iteration agent loop: re-stream the model, execute any new tool
+                            # calls in parallel, repeat until we get a plain-content response or
+                            # hit MAX_TOOL_ITERATIONS. Content streams to TTS sentence-by-sentence
+                            # as it arrives — no accumulate-then-speak delay.
                             tool_final_response = ""
-                            enabled_tool_defs = get_enabled_tools(self.enabled_tools)
-                            async for chunk in llm.stream_complete(followup_messages, tools=enabled_tool_defs if enabled_tool_defs else None):
-                                if chunk.startswith("data: "):
+                            sentence_buf = ""
+                            spoke_anything = False
+                            # If ask_claw already spoke its reply directly via the streaming path,
+                            # the LLM follow-up usually adds 1-2 sentences of paraphrasing. To
+                            # avoid double-speaking, give the model an explicit instruction that
+                            # the user already heard Claw and ONLY a brief 1-sentence ack is needed.
+                            already_spoke_via_claw = any(
+                                _safely_spoken_flag(tr.get("content")) for tr in tool_results
+                            )
+                            if already_spoke_via_claw:
+                                self.conversation_history.append({
+                                    "role": "system",
+                                    "content": ("The previous tool result was already spoken aloud "
+                                                "to the user. Reply with at most ONE short ack "
+                                                "sentence (or just '.' if no ack is needed). "
+                                                "Do NOT repeat or paraphrase what was just said."),
+                                })
+                            enabled_tool_defs = _filter_for_demo(get_enabled_tools(self.enabled_tools))
+                            for iteration in range(self.MAX_TOOL_ITERATIONS):
+                                if not self.alive:
+                                    print(f"[Voice Session] client disconnected — aborting agent loop")
+                                    return
+                                print(f"[Voice Session] Agent loop iteration {iteration+1}/{self.MAX_TOOL_ITERATIONS}")
+                                followup_messages = list(self.conversation_history)
+                                next_tool_calls = None
+                                async for chunk in llm.stream_complete(
+                                    followup_messages,
+                                    tools=enabled_tool_defs if enabled_tool_defs else None,
+                                ):
+                                    if not self.alive:
+                                        return
+                                    if not chunk.startswith("data: "):
+                                        continue
                                     try:
                                         data = json.loads(chunk[6:])
-                                        if "content" in data and data["content"]:
-                                            tool_final_response += data["content"]
-                                        elif "tool_calls_complete" in data:
-                                            # Another tool call - handle recursively (for now, just break)
-                                            print(f"[Voice Session] Another tool call detected, stopping recursion")
-                                            break
+                                    except json.JSONDecodeError:
+                                        continue
+                                    if "tool_calls_complete" in data:
+                                        next_tool_calls = data["tool_calls_complete"]
+                                        break
+                                    if "content" in data and data["content"]:
+                                        piece = data["content"]
+                                        tool_final_response += piece
+                                        sentence_buf += piece
+                                        # Progressive TTS: speak each complete sentence as it forms
+                                        sentences, sentence_buf = self._extract_complete_sentences(sentence_buf)
+                                        for s in sentences:
+                                            s = s.strip()
+                                            if s:
+                                                # Serial: don't interleave PCM frames from consecutive
+                                                # sentences on the socket.
+                                                await self.stream_tts(s)
+                                                spoke_anything = True
+                                    elif "error" in data:
+                                        print(f"[Voice Session] LLM error during agent loop: {data['error']}")
+                                if not next_tool_calls:
+                                    break
+                                # Announce continued work and execute in parallel
+                                await self.send_message("tool_invocation", {"message": "One moment…"})
+                                more_results = await self._execute_tool_calls_parallel(next_tool_calls)
+                                self.conversation_history.append({
+                                    "role": "assistant", "content": None, "tool_calls": next_tool_calls,
+                                })
+                                for tr in more_results:
+                                    self.conversation_history.append(tr)
+                                    try:
+                                        d = json.loads(tr.get("content", "{}"))
+                                        if d.get("agent_type"):
+                                            await self.send_message("agent_started", {
+                                                "agent_type": d.get("agent_type"),
+                                                "task": d.get("task", ""),
+                                            })
                                     except json.JSONDecodeError:
                                         pass
+                                tool_results.extend(more_results)  # for agent-tool detection below
+                            else:
+                                print(f"[Voice Session] ⚠️ hit MAX_TOOL_ITERATIONS={self.MAX_TOOL_ITERATIONS}")
                             
                             # Check if any of the executed tools were agents
                             is_agent_tool = False
                             agent_type = None
                             agent_task = None
-                            agent_context = ""
-                            agent_output_path = ""
-                            agent_items = []
                             for tool_result in tool_results:
                                 try:
                                     result_data = json.loads(tool_result.get("content", "{}"))
@@ -821,9 +1113,6 @@ class VoiceSession:
                                         is_agent_tool = True
                                         agent_type = result_data.get("agent_type")
                                         agent_task = result_data.get("task", "")
-                                        agent_context = result_data.get("context", "")
-                                        agent_output_path = result_data.get("output_path", "")
-                                        agent_items = result_data.get("items", [])
                                         break
                                 except json.JSONDecodeError:
                                     pass
@@ -848,7 +1137,7 @@ CRITICAL INSTRUCTIONS:
                                     },
                                     {
                                         "role": "user",
-                                        "content": f"Task: {agent_task}\n\nContext: {agent_context}" if agent_context else f"Task: {agent_task}"
+                                        "content": f"Write the following document: {agent_task}"
                                     }
                                 ]
                                 
@@ -861,37 +1150,27 @@ CRITICAL INSTRUCTIONS:
                                 markdown_response = ""
                                 reasoning_accumulated = ""
                                 chunk_count = 0
-                                stream_path, file_path = self.begin_markdown_workspace_stream(
-                                    agent_task,
-                                    agent_output_path
-                                )
-                                print(f"[Voice Session] Streaming markdown to {file_path}")
                                 
                                 # Stream tokens directly to markdown editor as they arrive
                                 await self.send_message("agent_markdown_chunk", {"content": "", "done": False})
                                 
-                                with stream_path.open("a", encoding="utf-8") as stream_file:
-                                    async for chunk in markdown_gen_llm.stream_complete(markdown_generation_messages, tools=None):
-                                        chunk_count += 1
-                                        if chunk.startswith("data: "):
-                                            try:
-                                                data = json.loads(chunk[6:])
-                                                if "content" in data and data["content"]:
-                                                    content = data["content"]
-                                                    markdown_response += content
-                                                    stream_file.write(content)
-                                                    stream_file.flush()
-                                                    # Stream to markdown editor immediately
-                                                    await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
-                                                elif "reasoning_content" in data and data["reasoning_content"]:
-                                                    reasoning_accumulated += data["reasoning_content"]
-                                            except json.JSONDecodeError:
-                                                pass
-                                        elif chunk.strip() and not chunk.startswith("data: "):
-                                            markdown_response += chunk
-                                            stream_file.write(chunk)
-                                            stream_file.flush()
-                                            await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
+                                async for chunk in markdown_gen_llm.stream_complete(markdown_generation_messages, tools=None):
+                                    chunk_count += 1
+                                    if chunk.startswith("data: "):
+                                        try:
+                                            data = json.loads(chunk[6:])
+                                            if "content" in data and data["content"]:
+                                                content = data["content"]
+                                                markdown_response += content
+                                                # Stream to markdown editor immediately
+                                                await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
+                                            elif "reasoning_content" in data and data["reasoning_content"]:
+                                                reasoning_accumulated += data["reasoning_content"]
+                                        except json.JSONDecodeError:
+                                            pass
+                                    elif chunk.strip() and not chunk.startswith("data: "):
+                                        markdown_response += chunk
+                                        await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
                                 
                                 print(f"[Voice Session] Markdown generation complete: {len(markdown_response)} chars")
                                 
@@ -910,26 +1189,18 @@ CRITICAL INSTRUCTIONS:
                                     
                                     if markdown_response:
                                         print(f"[Voice Session] Markdown generated: {len(markdown_response)} characters")
-
-                                        file_path = self.write_markdown_to_workspace(
-                                            agent_task,
-                                            markdown_response,
-                                            agent_output_path
-                                        )
-                                        print(f"[Voice Session] Markdown written to {file_path}")
                                         
                                         # Signal completion
                                         await self.send_message("agent_markdown_chunk", {"content": "", "done": True})
                                         
                                         # Add to conversation history
-                                        markdown_summary = f"Generated documentation at {file_path} for: {agent_task}\n\n{markdown_response[:500]}{'...' if len(markdown_response) > 500 else ''}"
+                                        markdown_summary = f"Generated documentation for: {agent_task}\n\n{markdown_response[:500]}{'...' if len(markdown_response) > 500 else ''}"
                                         self.conversation_history.append({"role": "assistant", "content": markdown_summary})
                                         
                                         # Send a message to frontend to add markdown to conversation UI
                                         await self.send_message("agent_markdown_complete", {
                                             "task": agent_task,
-                                            "markdown": markdown_response,
-                                            "file_path": file_path
+                                            "markdown": markdown_response
                                         })
                                         return
                                     else:
@@ -938,7 +1209,7 @@ CRITICAL INSTRUCTIONS:
                                     print(f"[Voice Session] No markdown response received")
                             
                             elif is_agent_tool and agent_type == "reasoning_assistant":
-                                # For reasoning assistant, use Nemotron for deep analysis
+                                # For reasoning assistant, call Qwen3.6 with reasoning_effort=high
                                 agent_problem = ""
                                 agent_context = ""
                                 agent_analysis_type = "general"
@@ -961,14 +1232,6 @@ CRITICAL INSTRUCTIONS:
                                     return
                                 else:
                                     print(f"[Voice Session] No problem found for reasoning agent")
-
-                            elif is_agent_tool and agent_type == "workspace_update_assistant":
-                                await self.execute_workspace_update_agent(
-                                    agent_task or "Add handwritten todos to the project",
-                                    agent_context,
-                                    agent_items if isinstance(agent_items, list) else []
-                                )
-                                return
                             
                             # Process and send the final response from tool execution (for non-agent tools or fallback)
                             if tool_final_response and tool_final_response.strip():
@@ -978,14 +1241,20 @@ CRITICAL INSTRUCTIONS:
                                 tool_final_response = tool_final_response.replace("<|end|>", "")
                                 tool_final_response = tool_final_response.replace("<|start|>assistant", "")
                                 tool_final_response = tool_final_response.strip()
-                                
+
                                 if tool_final_response:
                                     print(f"[Voice Session] Tool execution final response: {tool_final_response[:100]}...")
-                                    # Add to conversation history
                                     self.conversation_history.append({"role": "assistant", "content": tool_final_response})
-                                    # Regular tool - send final response and TTS
-                                    await self.send_final_response(tool_final_response)
-                                    return  # Exit early since we've handled tool execution
+                                    if spoke_anything:
+                                        # Already streamed sentence-by-sentence. Flush the trailing
+                                        # fragment and emit the UI-only final message.
+                                        tail = (sentence_buf or "").strip()
+                                        if tail:
+                                            await self.stream_tts(tail)
+                                        await self.send_message("final_response", {"text": tool_final_response})
+                                    else:
+                                        await self.send_final_response(tool_final_response)
+                                    return
                                 else:
                                     print(f"[Voice Session] Tool execution response was empty after processing")
                             else:
@@ -1060,247 +1329,7 @@ CRITICAL INSTRUCTIONS:
         else:
             print(f"[Voice Session] No final_response to send!")
 
-    def infer_markdown_output_path(self, task: str) -> str:
-        """Infer a workspace-relative markdown path from the user's task."""
-        import re
-
-        task_lower = (task or "").lower()
-        if "readme" in task_lower:
-            return "README.md"
-        if any(term in task_lower for term in ["realtime", "real-time", "redis", "pub/sub", "fanout"]):
-            return "realtime_design.md"
-        if "personal" in task_lower and any(term in task_lower for term in ["todo", "to-do"]):
-            return "personal_todos.md"
-        if any(term in task_lower for term in ["task", "todo", "to-do"]) and any(term in task_lower for term in ["project", "dashboard"]):
-            return "project_dashboard/tasks.md"
-
-        slug = re.sub(r"[^a-z0-9]+", "-", task_lower).strip("-")[:48]
-        return f"{slug or 'document'}.md"
-
-    def resolve_workspace_markdown_path(self, output_path: str, task: str) -> Path:
-        """Resolve a model-provided path into the shared workspace directory."""
-        workspace_dir = WORKSPACE_ROOT / "workspace"
-        requested = (output_path or "").strip() or self.infer_markdown_output_path(task)
-        relative_path = Path(requested)
-
-        if relative_path.is_absolute():
-            relative_path = Path(relative_path.name)
-
-        parts = [part for part in relative_path.parts if part not in ("", ".", "..")]
-        if parts and parts[0].lower() == "workspace":
-            parts = parts[1:]
-        if not parts:
-            parts = ["document.md"]
-
-        safe_relative = Path(*parts)
-        if safe_relative.suffix.lower() != ".md":
-            safe_relative = safe_relative.with_suffix(".md")
-
-        workspace_resolved = workspace_dir.resolve()
-        output_resolved = (workspace_dir / safe_relative).resolve()
-        if output_resolved != workspace_resolved and workspace_resolved not in output_resolved.parents:
-            output_resolved = workspace_resolved / "document.md"
-
-        return output_resolved
-
-    def write_markdown_to_workspace(self, task: str, markdown: str, output_path: str = "") -> str:
-        """Write markdown into workspace/ and return a path relative to WORKSPACE_ROOT."""
-        path = self.resolve_workspace_markdown_path(output_path, task)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(markdown.rstrip() + "\n", encoding="utf-8")
-        return str(path.relative_to(WORKSPACE_ROOT))
-
-    def begin_markdown_workspace_stream(self, task: str, output_path: str = "") -> tuple[Path, str]:
-        """Create/truncate a workspace markdown file before streaming content into it."""
-        path = self.resolve_workspace_markdown_path(output_path, task)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("", encoding="utf-8")
-        return path, str(path.relative_to(WORKSPACE_ROOT))
-
-    def extract_workspace_todos(self, task: str, context: str = "", items: list = None) -> List[str]:
-        """Extract todo items from tool arguments, visible-note context, or Beat 4 fallback."""
-        import re
-
-        raw_items = [str(item).strip() for item in (items or []) if str(item).strip()]
-        source = "\n".join([task or "", context or ""])
-
-        if not raw_items:
-            cleaned_source = re.sub(
-                r"(?i)(visible handwritten note|handwritten note|todo list|todos?|items?|the note says|the note lists|context|task)\s*[:\-]?",
-                "\n",
-                source,
-            )
-            for part in re.split(r"[\n;,]+", cleaned_source):
-                item = re.sub(r"^\s*(?:[-*•]|\d+[.)]|\[\s?\])\s*", "", part).strip()
-                item = item.strip(" .")
-                if not item:
-                    continue
-                if item.lower() in {"add these to the project", "add these", "project", "personal"}:
-                    continue
-                if len(item.split()) > 8:
-                    continue
-                raw_items.append(item)
-
-        known_items = [
-            "add streaming updates",
-            "Redis pub/sub",
-            "write events table",
-            "React hook",
-            "test reconnect",
-            "buy umbrella",
-        ]
-        source_lower = source.lower()
-        for known in known_items:
-            if known.lower() in source_lower and known not in raw_items:
-                raw_items.append(known)
-
-        if not raw_items and "add these" in source_lower and "project" in source_lower:
-            raw_items = known_items
-
-        normalized = []
-        seen = set()
-        for item in raw_items:
-            item = self.normalize_workspace_todo(item)
-            key = item.lower()
-            if item and key not in seen:
-                normalized.append(item)
-                seen.add(key)
-        return normalized
-
-    def normalize_workspace_todo(self, item: str) -> str:
-        """Normalize common Beat 4 todo wording into clean task labels."""
-        item_clean = " ".join((item or "").strip().split())
-        lower = item_clean.lower()
-        mappings = {
-            "add streaming updates": "Add streaming updates",
-            "streaming updates": "Add streaming updates",
-            "redis pub/sub": "Add Redis pub/sub",
-            "redis pub sub": "Add Redis pub/sub",
-            "write events table": "Write events table",
-            "events table": "Write events table",
-            "react hook": "Build React hook",
-            "test reconnect": "Test reconnect",
-            "buy umbrella": "Buy umbrella",
-        }
-        if lower in mappings:
-            return mappings[lower]
-        return item_clean[:1].upper() + item_clean[1:]
-
-    def split_workspace_todos(self, todos: List[str]) -> tuple[List[str], List[str]]:
-        """Split project tasks from personal todos."""
-        personal_keywords = {"umbrella", "buy ", "groceries", "personal", "errand"}
-        project_tasks = []
-        personal_tasks = []
-        for todo in todos:
-            lower = todo.lower()
-            if any(keyword in lower for keyword in personal_keywords):
-                personal_tasks.append(todo)
-            else:
-                project_tasks.append(todo)
-        return project_tasks, personal_tasks
-
-    def upsert_markdown_section(self, path: Path, title: str, body: str, marker: str) -> None:
-        """Create or replace a marked section in a markdown file."""
-        start = f"<!-- {marker}:start -->"
-        end = f"<!-- {marker}:end -->"
-        section = f"{start}\n## {title}\n\n{body.rstrip()}\n{end}\n"
-
-        if path.exists():
-            content = path.read_text(encoding="utf-8")
-        else:
-            heading = path.stem.replace("_", " ").replace("-", " ").title()
-            content = f"# {heading}\n"
-
-        if start in content and end in content:
-            before, rest = content.split(start, 1)
-            _, after = rest.split(end, 1)
-            updated = before.rstrip() + "\n\n" + section + after.lstrip("\n")
-        else:
-            updated = content.rstrip() + "\n\n" + section
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(updated.rstrip() + "\n", encoding="utf-8")
-
-    def apply_workspace_todo_updates(self, todos: List[str]) -> Dict[str, Any]:
-        """Route Beat 4 todos into project and personal workspace files."""
-        project_tasks, personal_tasks = self.split_workspace_todos(todos)
-        files = {}
-
-        task_path = self.resolve_workspace_markdown_path("project_dashboard/tasks.md", "project tasks")
-        task_lines = "\n".join(f"- [ ] {task}" for task in project_tasks) or "- [ ] Review project notes"
-        self.upsert_markdown_section(
-            task_path,
-            "Engineering Tasks From Handwritten Notes",
-            "These tasks came from the handwritten note captured during the phone demo.\n\n" + task_lines,
-            "spark-beat4-project-tasks",
-        )
-        files["project_tasks"] = str(task_path.relative_to(WORKSPACE_ROOT))
-
-        design_path = self.resolve_workspace_markdown_path("realtime_design.md", "realtime design")
-        design_body = "\n".join([
-            "Handwritten notes added these implementation details to the realtime dashboard design:",
-            "",
-            "- Streaming updates should be pushed live to connected React dashboards.",
-            "- Redis pub/sub fans events out across FastAPI instances.",
-            "- An events table in MySQL keeps durable history for reconnect and catch-up.",
-            "- A React hook should own subscription, state updates, and reconnect handling.",
-            "- Reconnect behavior needs an explicit test path.",
-        ])
-        self.upsert_markdown_section(
-            design_path,
-            "Handwritten Follow-Up",
-            design_body,
-            "spark-beat4-realtime-followup",
-        )
-        files["realtime_design"] = str(design_path.relative_to(WORKSPACE_ROOT))
-
-        personal_path = self.resolve_workspace_markdown_path("personal_todos.md", "personal todos")
-        personal_lines = "\n".join(f"- [ ] {task}" for task in personal_tasks) or "- [ ] Review personal notes"
-        self.upsert_markdown_section(
-            personal_path,
-            "Personal Todos",
-            personal_lines,
-            "spark-beat4-personal-todos",
-        )
-        files["personal_todos"] = str(personal_path.relative_to(WORKSPACE_ROOT))
-
-        return {
-            "files": files,
-            "project_tasks": project_tasks,
-            "personal_tasks": personal_tasks,
-        }
-
-    async def execute_workspace_update_agent(self, task: str, context: str = "", items: list = None):
-        """Route handwritten todos into the shared workspace files."""
-        try:
-            todos = self.extract_workspace_todos(task, context, items)
-            result = self.apply_workspace_todo_updates(todos)
-            files = result["files"]
-            summary = (
-                "Done. I updated the project tasks, realtime design, and personal todos."
-            )
-
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": (
-                    f"{summary} Files: {files['project_tasks']}, "
-                    f"{files['realtime_design']}, {files['personal_todos']}"
-                )
-            })
-            await self.send_message("workspace_update_complete", {
-                "summary": summary,
-                "files": files,
-                "project_tasks": result["project_tasks"],
-                "personal_tasks": result["personal_tasks"],
-            })
-            await self.stream_tts(summary)
-        except Exception as e:
-            print(f"[Voice Session] Workspace update agent error: {e}")
-            import traceback
-            traceback.print_exc()
-            await self.send_message("error", {"error": f"Workspace update error: {str(e)}"})
-
-    async def execute_markdown_agent(self, task: str, context: str = "", output_path: str = ""):
+    async def execute_markdown_agent(self, task: str, context: str = ""):
         """Execute the markdown assistant agent and stream results."""
         try:
             print(f"[Voice Session] Executing markdown agent: {task[:50]}...")
@@ -1319,52 +1348,35 @@ CRITICAL INSTRUCTIONS:
             # Create LLM client for agent
             agent_llm = LlamaCppClient(LLMConfig())
             md_response = ""
-            stream_path, file_path = self.begin_markdown_workspace_stream(task, output_path)
-            print(f"[Voice Session] Streaming markdown to {file_path}")
             
             # Send initial chunk to signal start
-            await self.send_message("agent_markdown_chunk", {"content": "", "done": False})
+            await self.send_mesrsage("agent_markdown_chunk", {"content": "", "done": False})
             
-            with stream_path.open("a", encoding="utf-8") as stream_file:
-                async for chunk in agent_llm.stream_complete(md_messages, tools=None):
-                    if chunk.startswith("data: "):
-                        try:
-                            data = json.loads(chunk[6:])
-                            if "content" in data and data["content"]:
-                                content = data["content"]
-                                md_response += content
-                                stream_file.write(content)
-                                stream_file.flush()
-                                await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
-                        except json.JSONDecodeError:
-                            pass
-                    elif chunk.strip() and not chunk.startswith("data: "):
-                        md_response += chunk
-                        stream_file.write(chunk)
-                        stream_file.flush()
-                        await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
+            async for chunk in agent_llm.stream_complete(md_messages, tools=None):
+                if chunk.startswith("data: "):
+                    try:
+                        data = json.loads(chunk[6:])
+                        if "content" in data and data["content"]:
+                            content = data["content"]
+                            md_response += content
+                            await self.send_message("agent_markdown_chunk", {"content": content, "done": False})
+                    except json.JSONDecodeError:
+                        pass
+                elif chunk.strip() and not chunk.startswith("data: "):
+                    md_response += chunk
+                    await self.send_message("agent_markdown_chunk", {"content": chunk, "done": False})
             
             # Clean up response
             if md_response:
                 md_response = agent_llm._extract_final_channel(md_response)
             
             print(f"[Voice Session] Markdown generation complete: {len(md_response)} chars")
-
-            file_path = ""
-            if md_response.strip():
-                file_path = self.write_markdown_to_workspace(task, md_response, output_path)
-                print(f"[Voice Session] Markdown written to {file_path}")
-                self.conversation_history.append({
-                    "role": "assistant",
-                    "content": f"Created {file_path} for: {task}"
-                })
             
             # Signal completion
             await self.send_message("agent_markdown_chunk", {"content": "", "done": True})
             await self.send_message("agent_markdown_complete", {
                 "task": task,
-                "markdown": md_response,
-                "file_path": file_path
+                "markdown": md_response
             })
             
         except Exception as e:
@@ -1376,30 +1388,54 @@ CRITICAL INSTRUCTIONS:
     async def execute_html_agent(self, task: str, context: str = ""):
         """Execute the HTML assistant agent and stream results."""
         try:
+            # Orchestrator (Qwen, temp=0.7) sometimes omits `task` despite the
+            # schema marking it required. Anchor on the last user utterance so
+            # we don't fall back to the HTML model's generic-demo prior.
+            if not task.strip():
+                for msg in reversed(self.conversation_history):
+                    content = msg.get("content")
+                    if msg.get("role") == "user" and isinstance(content, str) and content.strip():
+                        task = content
+                        print(f"[Voice Session] HTML agent task empty; using last user turn: {task[:80]!r}")
+                        break
             print(f"[Voice Session] Executing HTML agent: {task[:50]}...")
             
             # Signal agent started
             await self.send_message("agent_started", {"agent_type": "html_assistant", "task": task})
-            
-            # Build messages for HTML generation
-            html_prompt = """You are an expert HTML, CSS, and JavaScript assistant. Generate clean, semantic, and functional web pages or components.
 
-Guidelines:
-- Generate complete HTML documents including <!DOCTYPE html>, <html>, <head>, and <body>.
-- Use modern HTML5, CSS3, and vanilla JavaScript.
-- For styling, use inline styles or a <style> block in the <head>.
-- For interactivity, use a <script> block at the end of the <body>.
-- Ensure the generated HTML is self-contained and runnable in a browser.
+# removed from html prompt
+# Layout:
+# Top nav:
+# - abstract logo left
+# - How it works, Book Demo, Get Early Access right
 
-Output the complete HTML code."""
-            
+
+## okay so I'm thinking about re-building the html prompt with better formatting to be more realistic to a demo
+## basically by factoring out the project specific folders - similar to how an agent would populate a code base -- so let's have a look at that
+##
+## Style Preferences: 
+## <from style_preferences/frontend_style_preferences.md
+##
+## Response Guidelines: 
+## <hard coded into the html assitant>
+## Info about 
+## 
+## Project Details 
+## <e.g. taglines, info about the project>
+##
+##
+
+
+            # System prompt is assembled at import from
+            # _HTML_ROLE + frontend_style_preferences.md + chip_selector_harness.md
+            # (see HTML_PROMPT near the top of this file).
             html_messages = [
-                {"role": "system", "content": html_prompt},
+                {"role": "system", "content": HTML_PROMPT},
                 {"role": "user", "content": f"Task: {task}\n\nContext: {context}" if context else f"Task: {task}"}
             ]
             
             # Create LLM client for agent
-            agent_llm = LlamaCppClient(LLMConfig())
+            agent_llm = LlamaCppClient(HTMLConfig())
             html_response = ""
             
             # Send initial chunk to signal start
@@ -1424,7 +1460,21 @@ Output the complete HTML code."""
                 html_response = agent_llm._extract_final_channel(html_response)
             
             print(f"[Voice Session] HTML generation complete: {len(html_response)} chars")
-            
+
+            # write the html page to the workspace
+            # if html_response:
+            #     try:
+            #         workspace_dir = Path(__file__).parent / "workspace"
+            #         workspace_dir.mkdir(exist_ok=True)
+            #         slug = "".join(c if c.isalnum() else "-" for c in task.lower())[:40].strip("-") or "html"
+            #         filename = f"html_{slug}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+            #         output_path = workspace_dir / filename
+            #         output_path.write_text(html_response)
+            #         port = os.getenv("PORT", "8443")
+            #         print(f"[Voice Session] HTML written: https://localhost:{port}/workspace/{filename}")
+            #     except Exception as write_err:
+            #         print(f"[Voice Session] Failed to write HTML to workspace: {write_err}")
+
             # Signal completion
             await self.send_message("agent_html_chunk", {"content": "", "done": True})
             await self.send_message("agent_html_complete", {
@@ -1462,7 +1512,7 @@ Output the complete HTML code."""
         return ""
 
     async def execute_reasoning_agent(self, problem: str, context: str = "", analysis_type: str = "general"):
-        """Execute the Nemotron reasoning agent - shows thinking inline, then speaks conclusion."""
+        """Execute the deep-reasoning agent (Qwen3.6, effort=high) - shows thinking inline, then speaks conclusion."""
         try:
             print(f"[Voice Session] Executing reasoning agent: {problem[:80]}...")
             print(f"[Voice Session] Analysis type: {analysis_type}")
@@ -1479,15 +1529,15 @@ Output the complete HTML code."""
                 "analysis_type": analysis_type
             })
             
-            # Create Nemotron client
-            nemotron = NemotronClient(NemotronConfig())
-            
+            # Deep-reasoning via the same Qwen3.6 model, reasoning_effort=high
+            reasoner = ReasoningClient(ReasoningConfig())
+
             thinking_response = ""
             content_response = ""
             chunk_count = 0
-            
+
             # Stream the reasoning process
-            async for chunk in nemotron.stream_reasoning(problem, context, analysis_type):
+            async for chunk in reasoner.stream_reasoning(problem, context, analysis_type):
                 chunk_count += 1
                 if chunk_count <= 5:
                     print(f"[Voice Session] Reasoning chunk {chunk_count}: {chunk[:100]}...")
@@ -1587,10 +1637,12 @@ async def voice_call(websocket: WebSocket):
     """Persistent voice call WebSocket - handles ASR, LLM, and TTS."""
     await websocket.accept()
     session = VoiceSession(websocket)
-    
+    ACTIVE_SESSIONS.append(session)
+
     print("[Voice Call] Client connected")
     try:
         await session.send_message("connected", {"status": "ready"})
+        await session.send_message("token_usage", dict(TOKEN_COUNTS))
         # Wait a moment for frontend to send initial voice selection
         await asyncio.sleep(0.2)
         # Send a short greeting (don't add to conversation history)
@@ -1599,7 +1651,7 @@ async def voice_call(websocket: WebSocket):
         greetings = [
             "Hey! What's up?",
             "Hi there!",
-            "Hey, I'm Spark!",
+            "Hey, Claw here. What's up?",
             "What can I help with?",
             "Hi! Ready when you are.",
         ]
@@ -1627,6 +1679,9 @@ async def voice_call(websocket: WebSocket):
             # Binary = audio chunk for ASR
             if msg.get("bytes") is not None:
                 chunk_bytes = msg["bytes"]
+                # Voice-mode barge-in: a Claw turn streaming → user spoke → cancel.
+                if session._claw_in_flight:
+                    await session.cancel_claw_in_flight()
                 session.is_recording = True
                 try:
                     await session.process_asr_chunk(chunk_bytes)
@@ -1700,7 +1755,7 @@ async def voice_call(websocket: WebSocket):
                         enabled_tools = data.get("tools", [])
                         if isinstance(enabled_tools, list):
                             session.enabled_tools = enabled_tools
-                            enabled_tool_defs = get_enabled_tools(enabled_tools)
+                            enabled_tool_defs = _filter_for_demo(get_enabled_tools(enabled_tools))
                             print(f"[Voice Session] Tools updated: {enabled_tools} -> {[t['function']['name'] for t in enabled_tool_defs]}")
                             await session.send_message("tools_changed", {"tools": enabled_tools})
                         else:
@@ -1785,10 +1840,19 @@ async def voice_call(websocket: WebSocket):
                     elif msg_type == "video_call_data":
                         # Video call: audio + image from VAD/PTT
                         print("[Video Call] Received video_call_data")
+                        # Barge-in: if a Claw turn is mid-stream, cancel it.
+                        # The user is talking again — Claw's reply has been
+                        # superseded.
+                        if session._claw_in_flight:
+                            await session.cancel_claw_in_flight()
                         audio_b64 = data.get("audio")
                         image_b64 = data.get("image")
                         audio_format = data.get("format", "wav")
                         custom_prompt = data.get("system_prompt")
+                        # Cache the latest frame so ask_claw can pass it through to
+                        # Claw on the same turn (image pass-through, #46).
+                        if image_b64:
+                            session.last_camera_frame_b64 = image_b64
                         
                         if not audio_b64:
                             print("[Video Call] No audio in payload")
@@ -1891,7 +1955,9 @@ async def voice_call(websocket: WebSocket):
                                 # Use VLM for response
                                 from prompts import VIDEO_CALL_PROMPT, DEFAULT_SYSTEM_PROMPT
 
-                                # Combine personal context with video call prompt
+                                # Combine personal context with video call prompt.
+                                # Always append VIDEO_CALL_PROMPT so video-call-specific rules
+                                # (tools, personal context, etc.) survive a custom base prompt.
                                 base_prompt = custom_prompt or DEFAULT_SYSTEM_PROMPT
                                 system_prompt = f"{base_prompt}\n\n{VIDEO_CALL_PROMPT}"
 
@@ -1908,7 +1974,7 @@ async def voice_call(websocket: WebSocket):
                                 # Get VLM response
                                 vlm_start = time.perf_counter()
                                 vlm = VLMClient(VLMConfig())
-                                enabled_tool_defs = get_enabled_tools(session.enabled_tools)
+                                enabled_tool_defs = _filter_for_demo(get_enabled_tools(session.enabled_tools))
 
                                 # Use streaming if no tools enabled, otherwise use non-streaming for tool support
                                 if enabled_tool_defs:
@@ -1929,45 +1995,95 @@ async def voice_call(websocket: WebSocket):
 
                                     # Handle tool calls
                                     if tool_calls:
-                                        print(f"[Video Call] Tool calls: {[tc.get('function', {}).get('name') for tc in tool_calls]}")
+                                        tool_names = [tc.get('function', {}).get('name') for tc in tool_calls]
+                                        print(f"[Video Call] Tool calls: {tool_names}")
+
+                                        # Short-circuit to UI-dispatched agent tools (they stream their own output)
+                                        agent_dispatched = False
                                         for tool_call in tool_calls:
                                             func = tool_call.get("function", {})
                                             tool_name = func.get("name")
                                             try:
                                                 args = json.loads(func.get("arguments", "{}"))
-                                            except:
+                                            except Exception:
                                                 args = {}
+                                            if tool_name in ("markdown_assistant", "html_assistant", "reasoning_assistant"):
+                                                await session.stream_tts("On it.", is_transient=True)
+                                                if tool_name == "markdown_assistant":
+                                                    await session.execute_markdown_agent(args.get("task", ""), args.get("context", ""))
+                                                elif tool_name == "html_assistant":
+                                                    await session.execute_html_agent(args.get("task", ""), args.get("context", ""))
+                                                elif tool_name == "reasoning_assistant":
+                                                    await session.execute_reasoning_agent(
+                                                        args.get("problem", ""),
+                                                        args.get("context", ""),
+                                                        args.get("analysis_type", "general"),
+                                                    )
+                                                agent_dispatched = True
+                                                break
 
-                                            print(f"[Video Call] Tool '{tool_name}' args: {args}")
+                                        if not agent_dispatched:
+                                            # Inline tools: parallel exec + text-only agent loop to synthesize reply
+                                            await session.stream_tts("On it.", is_transient=True)
+                                            session.conversation_history.append({
+                                                "role": "assistant", "content": None, "tool_calls": tool_calls,
+                                            })
+                                            tool_results = await session._execute_tool_calls_parallel(tool_calls)
+                                            for tr in tool_results:
+                                                session.conversation_history.append(tr)
 
-                                            # Send acknowledgment
-                                            if tool_name == "workspace_update_assistant":
-                                                ack = "I'm adding these to the React/FastAPI/MySQL project dashboard we started from your whiteboard this morning."
-                                            else:
-                                                ack = "On it."
-                                            await session.stream_tts(ack, is_transient=True)
+                                            synth_text = ""
+                                            sb = ""
+                                            progressive = False
+                                            for _ in range(session.MAX_TOOL_ITERATIONS):
+                                                if not session.alive:
+                                                    return
+                                                next_calls = None
+                                                async for chunk in llm.stream_complete(
+                                                    list(session.conversation_history),
+                                                    tools=enabled_tool_defs if enabled_tool_defs else None,
+                                                ):
+                                                    if not session.alive:
+                                                        return
+                                                    if not chunk.startswith("data: "):
+                                                        continue
+                                                    try:
+                                                        d = json.loads(chunk[6:])
+                                                    except json.JSONDecodeError:
+                                                        continue
+                                                    if "tool_calls_complete" in d:
+                                                        next_calls = d["tool_calls_complete"]
+                                                        break
+                                                    if "content" in d and d["content"]:
+                                                        piece = d["content"]
+                                                        synth_text += piece
+                                                        sb += piece
+                                                        sents, sb = session._extract_complete_sentences(sb)
+                                                        for s in sents:
+                                                            s = s.strip()
+                                                            if s:
+                                                                # Serial: see server.py agent-loop note above.
+                                                                await session.stream_tts(s)
+                                                                progressive = True
+                                                if not next_calls:
+                                                    break
+                                                await session.send_message("tool_invocation", {"message": "One moment…"})
+                                                more = await session._execute_tool_calls_parallel(next_calls)
+                                                session.conversation_history.append({
+                                                    "role": "assistant", "content": None, "tool_calls": next_calls,
+                                                })
+                                                for tr in more:
+                                                    session.conversation_history.append(tr)
 
-                                            # Execute tool
-                                            if tool_name == "markdown_assistant":
-                                                await session.execute_markdown_agent(
-                                                    args.get("task", ""),
-                                                    args.get("context", ""),
-                                                    args.get("output_path", "")
-                                                )
-                                            elif tool_name == "html_assistant":
-                                                await session.execute_html_agent(args.get("task", ""), args.get("context", ""))
-                                            elif tool_name == "reasoning_assistant":
-                                                await session.execute_reasoning_agent(
-                                                    args.get("problem", ""),
-                                                    args.get("context", ""),
-                                                    args.get("analysis_type", "general")
-                                                )
-                                            elif tool_name == "workspace_update_assistant":
-                                                await session.execute_workspace_update_agent(
-                                                    args.get("task", "Add handwritten todos to the project"),
-                                                    args.get("context", ""),
-                                                    args.get("items", [])
-                                                )
+                                            if synth_text.strip():
+                                                session.conversation_history.append({"role": "assistant", "content": synth_text})
+                                                await session.send_message("llm_final", {"text": synth_text})
+                                                if progressive:
+                                                    tail = sb.strip()
+                                                    if tail:
+                                                        await session.stream_tts(tail)
+                                                else:
+                                                    await session.stream_tts(synth_text)
                                     else:
                                         # Regular response - speak it
                                         if response_text:
@@ -2015,7 +2131,11 @@ async def voice_call(websocket: WebSocket):
                     elif msg_type == "disconnect":
                         # Client requested disconnect
                         await session.send_message("disconnect_ack")
-                        await websocket.close()
+                        session._ws_closed = True
+                        try:
+                            await websocket.close()
+                        except Exception:
+                            pass
                         return
                     
                 except json.JSONDecodeError as e:
@@ -2033,6 +2153,10 @@ async def voice_call(websocket: WebSocket):
         except:
             pass
     finally:
+        try:
+            ACTIVE_SESSIONS.remove(session)
+        except ValueError:
+            pass
         print("[Voice Call] Session ended")
 
 

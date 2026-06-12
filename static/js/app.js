@@ -62,6 +62,44 @@ function onChatItemClick() {
   }
 }
 
+// Mobile "⚙️" button — expand the Configuration section and scroll to it
+function openMobileTools() {
+  const cc = document.getElementById('configContent');
+  const arrow = document.getElementById('configArrow');
+  if (!cc) return;
+  if (cc.style.display === 'none' || !cc.style.display) {
+    cc.style.display = 'block';
+    if (arrow) arrow.textContent = '▲';
+  }
+  cc.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+// PiP webcam — tap to expand to full-screen, tap again (or backdrop) to shrink
+function toggleWebcamPiP() {
+  // Only active on mobile widths where the PiP CSS kicks in
+  if (window.innerWidth > 768) return;
+  const webcam = document.querySelector('.video-chat-wrapper .video-call-container .video-call-webcam');
+  if (!webcam) return;
+  let backdrop = document.getElementById('videoWebcamBackdrop');
+  if (!backdrop) {
+    backdrop = document.createElement('div');
+    backdrop.id = 'videoWebcamBackdrop';
+    backdrop.className = 'video-webcam-backdrop';
+    backdrop.onclick = () => toggleWebcamPiP();
+    document.body.appendChild(backdrop);
+  }
+  const now = !webcam.classList.contains('expanded');
+  webcam.classList.toggle('expanded', now);
+  backdrop.classList.toggle('active', now);
+}
+window.toggleWebcamPiP = toggleWebcamPiP;
+
+document.addEventListener('DOMContentLoaded', () => {
+  const webcamBox = document.querySelector('.video-chat-wrapper .video-call-container .video-call-webcam');
+  if (webcamBox) webcamBox.addEventListener('click', toggleWebcamPiP);
+});
+window.openMobileTools = openMobileTools;
+
 // ========== Energy Gate for Noise Robustness ==========
 // Minimum RMS energy threshold to accept VAD speech detection
 // Values: 0.001 = very sensitive, 0.01 = moderate, 0.02 = strict
@@ -670,7 +708,6 @@ let videoCallVadInstance = null;
 let videoCallMuted = false;
 let videoCallCameraOn = true;
 let videoCallStream = null;
-let videoCallFacingMode = 'user';
 let videoCallWaveformBars = [];
 let videoCallSpeaking = false;
 let videoCallProcessing = false; // Flag to block VAD while processing a request
@@ -725,7 +762,14 @@ async function setupVideoCallMode() {
   
   // Start webcam
   try {
-    await startVideoCallCamera(videoCallFacingMode);
+    const video = document.getElementById('videoCallWebcam');
+    videoCallStream = await navigator.mediaDevices.getUserMedia({ 
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false // Audio handled by VAD
+    });
+    video.srcObject = videoCallStream;
+    await video.play();
+    log('Video call webcam started');
   } catch (err) {
     log(`Webcam error: ${err.message}`);
     document.getElementById('videoCallWebcamStatus').textContent = '❌ Camera Error';
@@ -897,10 +941,18 @@ function startVideoCallWaveformAnimation() {
 function updateVideoCallStatus(state, text) {
   const statusEl = document.getElementById('videoCallStatus');
   const textEl = document.getElementById('videoCallStatusText');
-  
+
   // Reuse voice-call-status classes for styling
   statusEl.className = `video-call-status voice-call-status ${state}`;
   textEl.textContent = text;
+
+  // Mirror the state onto the container so the mobile PiP-dot CSS
+  // (hearing / speaking / processing) can pick it up.
+  const container = document.getElementById('videoCallContainer');
+  if (container) {
+    container.classList.remove('listening', 'hearing', 'speaking', 'processing');
+    container.classList.add(state);
+  }
 }
 
 async function sendVideoCallData(audioFloat32) {
@@ -1006,53 +1058,6 @@ function toggleVideoCallMute() {
   }
 }
 
-async function startVideoCallCamera(facingMode = videoCallFacingMode) {
-  const video = document.getElementById('videoCallWebcam');
-  const status = document.getElementById('videoCallWebcamStatus');
-  const cameraBtn = document.getElementById('videoCallCameraBtn');
-
-  const getCameraStream = async (useExactFacingMode) => navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: useExactFacingMode ? { exact: facingMode } : { ideal: facingMode },
-      width: { ideal: 640 },
-      height: { ideal: 480 }
-    },
-    audio: false
-  });
-
-  let nextStream;
-  try {
-    nextStream = await getCameraStream(true);
-  } catch (err) {
-    log(`Exact ${facingMode} camera unavailable, trying ideal constraint: ${err.message}`);
-    nextStream = await getCameraStream(false);
-  }
-
-  if (videoCallStream) {
-    videoCallStream.getTracks().forEach(t => t.stop());
-  }
-
-  videoCallStream = nextStream;
-  videoCallFacingMode = facingMode;
-  videoCallCameraOn = true;
-
-  if (video) {
-    video.srcObject = videoCallStream;
-    video.classList.toggle('mirrored', facingMode === 'user');
-    video.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
-    await video.play();
-  }
-  if (cameraBtn) {
-    cameraBtn.classList.remove('off');
-    cameraBtn.textContent = '📷';
-  }
-  if (status) {
-    status.textContent = facingMode === 'environment' ? '📹 Back Camera' : '📹 Front Camera';
-  }
-
-  log(`Video call webcam started (${facingMode})`);
-}
-
 function toggleVideoCallCamera() {
   videoCallCameraOn = !videoCallCameraOn;
   const btn = document.getElementById('videoCallCameraBtn');
@@ -1072,29 +1077,6 @@ function toggleVideoCallCamera() {
     status.textContent = '📷 Camera Off';
     if (videoCallStream) {
       videoCallStream.getVideoTracks().forEach(t => t.enabled = false);
-    }
-  }
-}
-
-async function flipVideoCallCamera() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    log('Camera flip unavailable: getUserMedia not supported');
-    return;
-  }
-
-  const nextFacingMode = videoCallFacingMode === 'user' ? 'environment' : 'user';
-  const status = document.getElementById('videoCallWebcamStatus');
-
-  try {
-    if (status) status.textContent = '🔄 Switching camera...';
-    await startVideoCallCamera(nextFacingMode);
-    log(`Switched video camera to ${nextFacingMode}`);
-  } catch (err) {
-    log(`Camera flip failed: ${err.message}`);
-    if (status) {
-      status.textContent = videoCallCameraOn
-        ? (videoCallFacingMode === 'environment' ? '📹 Back Camera' : '📹 Front Camera')
-        : '📷 Camera Off';
     }
   }
 }
@@ -1783,9 +1765,17 @@ function toggleConfig() {
   const configContent = document.getElementById("configContent");
   const configSection = document.querySelector(".config-section");
   const isVisible = configContent.style.display !== "none";
-  
+
   configContent.style.display = isVisible ? "none" : "block";
   configSection.classList.toggle("expanded", !isVisible);
+}
+
+function toggleTokens() {
+  const content = document.getElementById("tokensContent");
+  const section = document.getElementById("tokensToggle").parentElement;
+  const isVisible = content.style.display !== "none";
+  content.style.display = isVisible ? "none" : "block";
+  section.classList.toggle("expanded", !isVisible);
 }
 
 function setConnectionStatus(status) {
@@ -1928,7 +1918,7 @@ function createMessageElement(role, content = "", isTransient = false) {
   return { container: messageDiv, content: contentDiv };
 }
 
-function createMarkdownMessageElement(task, markdown, filePath = "") {
+function createMarkdownMessageElement(task, markdown) {
   const messageDiv = document.createElement("div");
   messageDiv.className = "message message-assistant";
   
@@ -1950,16 +1940,6 @@ function createMarkdownMessageElement(task, markdown, filePath = "") {
   taskDiv.style.color = "#2c3e50";
   taskDiv.textContent = `📄 ${task}`;
   contentDiv.appendChild(taskDiv);
-
-  if (filePath) {
-    const fileDiv = document.createElement("div");
-    fileDiv.style.marginBottom = "0.75rem";
-    fileDiv.style.fontSize = "0.85rem";
-    fileDiv.style.color = "#4b5563";
-    fileDiv.style.fontFamily = "var(--font-mono)";
-    fileDiv.textContent = `Saved to ${filePath}`;
-    contentDiv.appendChild(fileDiv);
-  }
   
   // Rendered markdown preview (truncated)
   const previewDiv = document.createElement("div");
@@ -2052,23 +2032,16 @@ function connectVoiceWebSocket() {
         const initialVoice = voiceSelect.value;
         voiceWs.send(JSON.stringify({ type: "set_voice", voice: initialVoice }));
         
-        // Send initial tool state (capabilities + agents)
+        // Send initial tool state (capabilities + inline tools + agents)
         const capabilityCheckboxes = document.querySelectorAll('input[id^="cap"]');
+        const toolCheckboxes = document.querySelectorAll('input[id^="tool"]');
         const agentCheckboxes = document.querySelectorAll('input[id^="agent"]');
         const enabledTools = [];
-        
-        capabilityCheckboxes.forEach(cb => {
-          if (cb.checked) {
-            enabledTools.push(cb.value);
-          }
-        });
-        
-        agentCheckboxes.forEach(cb => {
-          if (cb.checked) {
-            enabledTools.push(cb.value);
-          }
-        });
-        
+
+        capabilityCheckboxes.forEach(cb => { if (cb.checked) enabledTools.push(cb.value); });
+        toolCheckboxes.forEach(cb => { if (cb.checked) enabledTools.push(cb.value); });
+        agentCheckboxes.forEach(cb => { if (cb.checked) enabledTools.push(cb.value); });
+
         voiceWs.send(JSON.stringify({ type: "set_tools", tools: enabledTools }));
         
       }
@@ -2260,7 +2233,7 @@ function createReasoningMessage(problem) {
   // Header
   const header = document.createElement("div");
   header.style.cssText = "display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(118, 185, 0, 0.3);";
-  header.innerHTML = `<span style="font-size: 1.2rem;">🧠</span><span style="color: #76b900; font-weight: 600;">Nemotron Reasoning</span><span id="reasoningSpinner" style="margin-left: auto; width: 12px; height: 12px; border: 2px solid #76b900; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></span>`;
+  header.innerHTML = `<span style="font-size: 1.2rem;">🧠</span><span style="color: #76b900; font-weight: 600;">Qwen3.6 Reasoning</span><span id="reasoningSpinner" style="margin-left: auto; width: 12px; height: 12px; border: 2px solid #76b900; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></span>`;
   container.appendChild(header);
   
   // Thinking section (collapsible)
@@ -2403,7 +2376,7 @@ function openReasoningModal(task, analysisType) {
   // Reset status
   const statusEl = document.getElementById("reasoningStatus");
   if (statusEl) {
-    statusEl.innerHTML = `<span style="width: 8px; height: 8px; background: #76b900; border-radius: 50%; animation: pulse 1s infinite;"></span><span style="color: #666;">Nemotron is thinking...</span>`;
+    statusEl.innerHTML = `<span style="width: 8px; height: 8px; background: #76b900; border-radius: 50%; animation: pulse 1s infinite;"></span><span style="color: #666;">Qwen3.6 is thinking...</span>`;
   }
   
   // Show thinking indicator
@@ -2623,6 +2596,10 @@ async function handleMessage(data) {
       // Greeting will be sent by server automatically
       break;
 
+    case "token_usage":
+      document.getElementById("tokensTotal").textContent = (data.web + data.discord).toLocaleString();
+      break;
+
     case "asr_partial":
       // Update current user message with partial transcription
       removeEmptyState();
@@ -2691,8 +2668,6 @@ async function handleMessage(data) {
       } else if (data.agent_type === "reasoning_assistant") {
         // Reasoning now uses inline display, not popup
         log("Reasoning uses inline display");
-      } else if (data.agent_type === "workspace_update_assistant") {
-        log("Workspace update assistant uses inline display");
       }
       break;
 
@@ -2785,28 +2760,11 @@ async function handleMessage(data) {
     case "agent_markdown_complete":
       // Markdown assistant finished - add to conversation
       removeEmptyState();
-      const mdMsg = createMarkdownMessageElement(data.task, data.markdown, data.file_path || "");
+      const mdMsg = createMarkdownMessageElement(data.task, data.markdown);
       getActiveConversationEl().appendChild(mdMsg.container);
       scrollToBottom();
       saveCurrentChat();
       log(`Markdown assistant completed: ${data.task.substring(0, 50)}...`);
-      break;
-
-    case "workspace_update_complete":
-      // Workspace update assistant finished - add file summary
-      hideThinkingIndicator();
-      removeEmptyState();
-      const workspaceFiles = data.files || {};
-      const workspaceSummary = data.summary || "Workspace files updated.";
-      const fileList = Object.values(workspaceFiles).filter(Boolean).join("\n");
-      const workspaceMsg = createMessageElement(
-        "assistant",
-        fileList ? `${workspaceSummary}\n\n${fileList}` : workspaceSummary
-      );
-      getActiveConversationEl().appendChild(workspaceMsg.container);
-      scrollToBottom();
-      saveCurrentChat();
-      log(`Workspace update completed: ${fileList}`);
       break;
 
     case "reasoning_started":
@@ -2960,9 +2918,13 @@ async function handleMessage(data) {
         });
       }
       
-      // Reset nextPlayTime for new TTS stream - start immediately
-      nextPlayTime = audioContext.currentTime;
-      log(`TTS playback scheduled to start at: ${nextPlayTime.toFixed(3)}s, context state: ${audioContext.state}`);
+      // Schedule new TTS stream after anything still queued so consecutive
+      // sentences don't play on top of each other. Only snap to "now" if
+      // the previous stream has already finished (nextPlayTime <= currentTime).
+      if (nextPlayTime === null || nextPlayTime < audioContext.currentTime) {
+        nextPlayTime = audioContext.currentTime;
+      }
+      log(`TTS playback scheduled at: ${nextPlayTime.toFixed(3)}s (currentTime: ${audioContext.currentTime.toFixed(3)}s), context state: ${audioContext.state}`);
       break;
 
     case "tts_done":
@@ -3365,21 +3327,14 @@ voiceSelect.onchange = (e) => {
 // Tool capability checkboxes handler
 function updateEnabledTools() {
   const capabilityCheckboxes = document.querySelectorAll('input[id^="cap"]');
+  const toolCheckboxes = document.querySelectorAll('input[id^="tool"]');
   const agentCheckboxes = document.querySelectorAll('input[id^="agent"]');
   const enabledTools = [];
-  
-  capabilityCheckboxes.forEach(cb => {
-    if (cb.checked) {
-      enabledTools.push(cb.value);
-    }
-  });
-  
-  agentCheckboxes.forEach(cb => {
-    if (cb.checked) {
-      enabledTools.push(cb.value);
-    }
-  });
-  
+
+  capabilityCheckboxes.forEach(cb => { if (cb.checked) enabledTools.push(cb.value); });
+  toolCheckboxes.forEach(cb => { if (cb.checked) enabledTools.push(cb.value); });
+  agentCheckboxes.forEach(cb => { if (cb.checked) enabledTools.push(cb.value); });
+
   if (voiceWs && voiceWs.readyState === WebSocket.OPEN) {
     voiceWs.send(JSON.stringify({ type: "set_tools", tools: enabledTools }));
     log(`Tools updated: ${enabledTools.join(", ")}`);
@@ -3388,18 +3343,10 @@ function updateEnabledTools() {
   }
 }
 
-// Attach change handlers to all capability and agent checkboxes
+// Attach change handlers to all capability, tool, and agent checkboxes
 document.addEventListener("DOMContentLoaded", () => {
-  const capabilityCheckboxes = document.querySelectorAll('input[id^="cap"]');
-  const agentCheckboxes = document.querySelectorAll('input[id^="agent"]');
-  
-  capabilityCheckboxes.forEach(cb => {
-    cb.addEventListener("change", updateEnabledTools);
-  });
-  
-  agentCheckboxes.forEach(cb => {
-    cb.addEventListener("change", updateEnabledTools);
-  });
+  const allCheckboxes = document.querySelectorAll('input[id^="cap"], input[id^="tool"], input[id^="agent"]');
+  allCheckboxes.forEach(cb => cb.addEventListener("change", updateEnabledTools));
 });
 
 
