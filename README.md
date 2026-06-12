@@ -73,14 +73,22 @@ docker run --rm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=6710886
 
 Two processes run side by side: a **llama.cpp** model server (`:30000`) and the **HTTPS frontend** (`:8443`); a **Discord bot** is optional. This is the condensed path — for the full walkthrough (building llama.cpp, Discord bot setup, vLLM alternative), see **[docs/setup-guide.md](docs/setup-guide.md)**.
 
+### Prerequisites
+
+- **DGX Spark (GB10)** with the **CUDA 13 toolchain + driver** (`nvcc --version` works), **Python 3.10+**, and `git`, `ffmpeg`, `jq`, plus a C++ build toolchain (`cmake`, `make`, a compiler) for building llama.cpp and the local-ASR CTranslate2.
+- The **Hugging Face CLI** (provides the `hf` command used below):
+  ```bash
+  pipx install huggingface_hub   # PEP 668-safe; run `sudo apt install pipx` first if needed
+  ```
+
 ### 1. Serve Qwen3.6 with llama.cpp
 
-Build [llama.cpp](https://github.com/ggml-org/llama.cpp) from source, then download the GGUF models and start `llama-server` with speculative decoding. `hf download` prints each file's cache path, so we capture it instead of hardcoding snapshot paths.
+Build [llama.cpp](https://github.com/ggml-org/llama.cpp) from source, then download the GGUF models and start `llama-server` with speculative decoding. `hf download --quiet` prints just the local cache path (downloading first if needed), so we capture it instead of hardcoding snapshot paths.
 
 ```bash
-MODEL=$(hf download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf)
-MMPROJ=$(hf download unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf)
-DRAFT=$(hf download unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q4_K_M.gguf)
+MODEL=$(hf download --quiet unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf)
+MMPROJ=$(hf download --quiet unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf)
+DRAFT=$(hf download --quiet unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q4_K_M.gguf)
 
 ~/llama.cpp/build/bin/llama-server \
   --model "$MODEL" --mmproj "$MMPROJ" -md "$DRAFT" \

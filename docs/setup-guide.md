@@ -25,6 +25,20 @@ Setup steps:
 
 ---
 
+## Prerequisites
+
+Before you begin, make sure the host has:
+
+- **DGX Spark (GB10)** with the **CUDA 13 toolchain and driver** installed (`nvcc --version` works).
+- **Python 3.10+** and `git`.
+- System packages: `ffmpeg` (audio decoding — the server checks for it at startup), `jq` (used by the sanity check), and a C++ build toolchain (`cmake`, `make`, a compiler) for building CTranslate2 and llama.cpp.
+- The **Hugging Face CLI**, which provides the `hf` command used to download models:
+  ```bash
+  pipx install huggingface_hub   # PEP 668-safe; run `sudo apt install pipx` first if needed
+  ```
+
+---
+
 ## Part 1. Set up the llama.cpp server
 
 ### Download the Qwen3.6 HF GGUF models
@@ -45,12 +59,12 @@ Visit https://github.com/ggml-org/llama.cpp and follow the README and `docs/` fo
 
 ### Start the llama.cpp server with Qwen3.6 and speculative decoding
 
-`hf download` prints the local cache path for each file, so capture those into variables instead of hardcoding snapshot-hash paths (the hash changes whenever a model is re-downloaded). If a file is already downloaded, this just prints its path — no re-download.
+`hf download --quiet` prints just the local cache path for each file, so capture those into variables instead of hardcoding snapshot-hash paths (the hash changes whenever a model is re-downloaded). If a file is already downloaded, this just prints its path — no re-download. (Without `--quiet`, the CLI prints a decorated `✓ Downloaded … path:` message that would pollute the captured variable.)
 
 ```bash
-MODEL=$(hf download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf)
-MMPROJ=$(hf download unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf)
-DRAFT=$(hf download unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q4_K_M.gguf)
+MODEL=$(hf download --quiet unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf)
+MMPROJ=$(hf download --quiet unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf)
+DRAFT=$(hf download --quiet unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q4_K_M.gguf)
 
 cd ~/llama.cpp && \
 ./build/bin/llama-server \
