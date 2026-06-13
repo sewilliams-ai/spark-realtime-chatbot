@@ -113,6 +113,10 @@ Then open **https://localhost:8443**, accept the self-signed certificate, and al
 
 ## Part 3. Set up Discord
 
+### Create your own Discord server
+
+In the Discord app, click the **+** in the server list and choose **Create My Own** → **For me and my friends**. You'll invite your bot here, so you need a server where you have **Manage Server** permission — your own server gives you that. For step-by-step help, see Discord's [How do I create a server?](https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server).
+
 ### Create your own Discord bot
 
 Each developer should run their own bot — sharing a token causes the bot to send duplicate responses (see FAQ) and is a security risk.
@@ -122,15 +126,7 @@ Each developer should run their own bot — sharing a token causes the bot to se
 3. Under **Token**, click **Reset Token** and copy the new token. (You can only view it once — save it somewhere safe.)
 4. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
 5. Go to **OAuth2 → URL Generator**. Select scopes: `bot`. Select bot permissions: `Send Messages`, `Read Message History`. Copy the generated URL.
-6. Open the URL in a browser and invite the bot to a Discord server where you have **Manage Server** permission (typically your own test server).
-
-### (Optional) Join the community Discord server
-
-To chat alongside the team:
-
-https://discord.gg/PbHDZVMT
-
-This invite only adds you as a user — it does not let you add bots to that server.
+6. Open the URL in a browser and invite the bot to the server you created above.
 
 ### Set the bot token as an env variable
 
