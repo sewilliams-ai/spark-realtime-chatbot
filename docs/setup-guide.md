@@ -118,7 +118,7 @@ Then open **https://localhost:8443**, accept the self-signed certificate, and al
 Each developer should run their own bot — sharing a token causes the bot to send duplicate responses (see FAQ) and is a security risk.
 
 1. Visit https://discord.com/developers/applications and click **New Application**.
-2. In your application, go to the **Bot** tab and click **Add Bot**.
+2. In your application, open the **Bot** tab — a bot user is created automatically with the application.
 3. Under **Token**, click **Reset Token** and copy the new token. (You can only view it once — save it somewhere safe.)
 4. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
 5. Go to **OAuth2 → URL Generator**. Select scopes: `bot`. Select bot permissions: `Send Messages`, `Read Message History`. Copy the generated URL.
