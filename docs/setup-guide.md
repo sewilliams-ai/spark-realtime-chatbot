@@ -126,7 +126,7 @@ Each developer should run their own bot — sharing a token causes the bot to se
 3. Under **Token**, click **Reset Token** and copy the new token. (You can only view it once — save it somewhere safe.)
 4. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
 5. Go to **OAuth2 → URL Generator**. Select scopes: `bot`. Select bot permissions: `Send Messages`, `Read Message History`. Copy the generated URL.
-6. Open the URL in a browser and invite the bot to the server you created above.
+6. Open the generated URL in a browser. On the **Add to Server** screen, pick your server from the dropdown and click **Continue**. Leave the requested permissions (**Send Messages**, **Read Message History**) checked and click **Authorize**, then complete the CAPTCHA if prompted. The bot now appears in your server's member list — it shows as offline until you start it below.
 
 ### Set the bot token as an env variable
 
