@@ -6,7 +6,7 @@ A voice + vision AI assistant running locally on DGX Spark — streaming speech 
 
 **Highlights**
 - **Single joint model**: Qwen3.6-35B-A3B handles text, vision, and reasoning (no separate VLM/reasoner)
-- **Ultra-low latency**: ~300ms voice turns, ~900ms video turns (warm, GB10)
+- **Ultra-low latency**: ~300ms voice turns, ~900ms video turns (warm, GB10), 80-90 tok/s for code and LLM generation
 - **Fully local**: llama.cpp on host, Whisper ASR, Kokoro TTS — no cloud dependencies
 - **Agentic**: streaming multi-turn tool-call loop (filesystem, Python sandbox, web search, memory)
 - **Face recognition**: DeepFace enrollment + identification in video-call mode
@@ -80,52 +80,131 @@ Two processes run side by side: a **llama.cpp** model server (`:30000`) and the 
   ```bash
   pipx install huggingface_hub   # PEP 668-safe; run `sudo apt install pipx` first if needed
   ```
+### Overview
 
-### 1. Serve Qwen3.6 with llama.cpp
+Setting up this demo has a few components. While running the demo, three servers are running:
 
-Build [llama.cpp](https://github.com/ggml-org/llama.cpp) from source, then download the GGUF models and start `llama-server` with speculative decoding. `hf download --quiet` prints just the local cache path (downloading first if needed), so we capture it instead of hardcoding snapshot paths.
+1. A **llama.cpp server** which serves the local model
+2. An **HTTPS server** which serves the frontend
+3. A **Discord bot server** which enables a user to talk to the AI backend on Discord
+
+Setup steps:
+
+- **Part 1.** Set up the llama.cpp server
+  - Download HF models
+  - Download (and build) llama.cpp
+  - Run the llama.cpp server
+- **Part 2.** Set up the demo repo
+  - Clone the demo repo
+  - Run the HTTPS server
+- **Part 3.** Set up Discord
+  - Create your own Discord bot
+  - Join the community Discord server (optional)
+  - Run the Discord bot server
+  - Send a sample message to the bot in Discord
+
+---
+
+### Part 1. Set up the llama.cpp server
+
+#### Download the Qwen3.6 HF GGUF models
+
+```bash
+hf download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf && \
+hf download unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf && \
+hf download unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q4_K_M.gguf
+```
+
+#### Install llama.cpp by building from source
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp.git
+```
+
+Visit https://github.com/ggml-org/llama.cpp and follow the README and `docs/` for build instructions.
+
+#### Start the llama.cpp server with Qwen3.6 and speculative decoding
+
+`hf download --quiet` prints just the local cache path for each file, so capture those into variables instead of hardcoding snapshot-hash paths (the hash changes whenever a model is re-downloaded). If a file is already downloaded, this just prints its path — no re-download. (Without `--quiet`, the CLI prints a decorated `✓ Downloaded … path:` message that would pollute the captured variable.)
 
 ```bash
 MODEL=$(hf download --quiet unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf)
 MMPROJ=$(hf download --quiet unsloth/Qwen3.6-35B-A3B-GGUF mmproj-BF16.gguf)
 DRAFT=$(hf download --quiet unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q4_K_M.gguf)
 
-~/llama.cpp/build/bin/llama-server \
-  --model "$MODEL" --mmproj "$MMPROJ" -md "$DRAFT" \
-  --host 0.0.0.0 --port 30000 --n-gpu-layers 99 --ctx-size 16384 \
-  --spec-draft-ngl 99 --spec-draft-n-max 16 --spec-draft-n-min 0 --spec-draft-p-min 0.75 \
-  --chat-template-kwargs '{"enable_thinking": false}' --threads 8
+cd ~/llama.cpp && \
+./build/bin/llama-server \
+  --model "$MODEL" \
+  --mmproj "$MMPROJ" \
+  -md "$DRAFT" \
+  --spec-draft-ngl 99 \
+  --spec-draft-n-max 16 \
+  --spec-draft-n-min 0 \
+  --spec-draft-p-min 0.75 \
+  --host 0.0.0.0 \
+  --port 30000 \
+  --n-gpu-layers 99 \
+  --ctx-size 16384 \
+  --chat-template-kwargs '{"enable_thinking": false}' \
+  --threads 8
 ```
 
-> **Keep `--ctx-size` ≥ 16384** — the html_assistant needs it; llama.cpp's 4096 default silently truncates.
+> **Important: keep `--ctx-size` at 16384 or higher.** The html_assistant needs ≥16k of context; llama.cpp's default (4096) silently truncates long prompts and destabilizes generation.
 
-Sanity check:
-```bash
-curl -s http://localhost:30000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"Qwen3.6-35B-A3B-UD-Q4_K_M.gguf","messages":[{"role":"user","content":"hi"}],"max_tokens":20,"reasoning_effort":"none"}' | jq .
-```
+### Part 2. Set up the demo repo and run the HTTPS server
 
-### 2. Run the HTTPS frontend
+#### Clone the demo repo and install dependencies
 
 ```bash
 git clone https://github.com/sewilliams-ai/spark-realtime-chatbot.git
 cd spark-realtime-chatbot
 python3 -m venv venv && source venv/bin/activate
-./setup.sh                    # CUDA CTranslate2 (local ASR) + requirements
+./setup.sh   # builds CUDA-enabled CTranslate2 (for local ASR) + installs requirements
+```
+
+#### Launch the HTTPS server
+
+The defaults in `launch-https.sh` and `config.py` already point at the llama.cpp backend (`localhost:30000`, `Qwen3.6-35B-A3B-UD-Q4_K_M.gguf`), so no environment variables are needed.
+
+```bash
+source venv/bin/activate && \
 ./launch-https.sh --local-asr
 ```
 
-Defaults already point at the llama.cpp backend on `:30000`, so **no environment variables are needed**. Open **https://localhost:8443**, accept the self-signed cert, and allow the microphone.
+Then open **https://localhost:8443**, accept the self-signed certificate, and allow the microphone.
 
-### 3. (Optional) Discord bot
+### Part 3. Set up Discord
+
+#### Create your own Discord server
+
+In the Discord app, click the **+** in the server list and choose **Create My Own** → **For me and my friends**. You'll invite your bot here, so you need a server where you have **Manage Server** permission — your own server gives you that. For step-by-step help, see Discord's [How do I create a server?](https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server).
+
+#### Create your own Discord bot
+
+Each developer should run their own bot — sharing a token causes the bot to send duplicate responses (see FAQ) and is a security risk.
+
+1. Visit https://discord.com/developers/applications and click **New Application**.
+2. In your application, open the **Bot** tab — a bot user is created automatically with the application.
+3. Under **Token**, click **Reset Token** and copy the new token. (You can only view it once — save it somewhere safe.)
+4. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
+5. Go to **OAuth2 → URL Generator**. Select scopes: `bot`. Select bot permissions: `View Channels`, `Send Messages`, `Read Message History`. Copy the generated URL.
+6. Complete the installation instructions at this youtube video (00:2:57). Instead of saving the TOKEN in a .env file, save it as an environment variable (`DISCORD_BOT_TOKEN`), which we'll cover below. 
+
+#### Run the Discord bot server
 
 ```bash
-export DISCORD_BOT_TOKEN=<your-bot-token>
-source venv/bin/activate && python3 clients/discord-bot.py
+# cd path/to/spark-realtime-chatbot
+DISCORD_BOT_TOKEN=<TOKEN HERE>
+
+source venv/bin/activate && \
+python3 clients/discord-bot.py
 ```
 
-See [docs/setup-guide.md](docs/setup-guide.md) for creating your own bot.
+Send a sample message to the bot in your Discord server to confirm it responds.
+
+---
+
+Please review for troubleshooting, FAQs, and details on running with Ollama as the backend for simpler setup. 
 
 ---
 
@@ -185,15 +264,18 @@ Key files:
 
 ### Things to try
 
-- **Whiteboard → README**: draw a system diagram, show it in video mode, say "convert this into a markdown README."
+- **Sketch → Frontend**: draw a frontend sketch, show it in video mode, say "convert this into a markdown README."*
 - **Architecture review**: show a diagram, ask "what's missing from this design?"
-- **Fashion advisor**: "am I dressed appropriately for a board meeting?"
+- **Menu Translation & Recommendation for Personalized Health Recommendations**: "what should I order based on this menu?"*
 - **Face recognition**: say "remember my face as Alex," end the call, start a new one — the bot greets you by name.
+
+\* Currently tuned for a chip selection agent and high blood pressure based on mock demo data, users can configure with personalized data for richer results.
 
 ---
 
 ## Acknowledgements
 
+- [Kedar's Original Repo](https://github.com/kedarpotdar-nv/spark-realtime-chatbot) - original demo with similar core functionality
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) — local model serving
 - [Qwen3.6](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) — joint VL + reasoning (Alibaba)
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — ASR
