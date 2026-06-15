@@ -126,20 +126,14 @@ Each developer should run their own bot — sharing a token causes the bot to se
 3. Under **Token**, click **Reset Token** and copy the new token. (You can only view it once — save it somewhere safe.)
 4. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
 5. Go to **OAuth2 → URL Generator**. Select scopes: `bot`. Select bot permissions: `View Channels`, `Send Messages`, `Read Message History`. Copy the generated URL.
-6. Open the generated URL in a browser. On the **Add to Server** screen, pick your server from the dropdown and click **Continue**. Leave the requested permissions (**View Channels**, **Send Messages**, **Read Message History**) checked and click **Authorize**, then complete the CAPTCHA if prompted. The bot now appears in your server's member list — it shows as offline until you start it below.
-
-### Set the bot token as an env variable
-
-Add to `~/.bashrc` (or export per-session):
-
-```bash
-export DISCORD_BOT_TOKEN=<your-discord-bot-token>
-```
+6. Complete the installation instructions at this youtube video (00:2:57). Instead of saving the TOKEN in a .env file, save it as an environment variable (`DISCORD_BOT_TOKEN`), which we'll cover below. 
 
 ### Run the Discord bot server
 
 ```bash
 # cd path/to/spark-realtime-chatbot
+DISCORD_BOT_TOKEN=<TOKEN HERE>
+
 source venv/bin/activate && \
 python3 clients/discord-bot.py
 ```
@@ -151,40 +145,16 @@ Send a sample message to the bot in your Discord server to confirm it responds.
 ## FAQs / Gotchas
 
 **Q: The Discord bot sends two responses.**
-A: That means two instances of the bot are running with the same token — one on this device, one elsewhere. Stop the duplicate (e.g. `pkill -f discord-bot.py` on the other machine) and rerun. Long-term fix: each developer should use their own bot token, not a shared one.
+**A:** That means two instances of the bot are running with the same token — one on this device, one elsewhere. Stop the duplicate (e.g. `pkill -f discord-bot.py` on the other machine) and rerun. Long-term fix: each developer should use their own bot token, not a shared one.
+
+**Q: Discord bot says integration requires code grant when joining the server.**
+**A**: If you are receiving an "Integration requires code grant" error when trying to invite your Discord bot, it means the bot's settings are incorrectly configured. You can fix this instantly by turning off the OAuth2 Code Grant option in your application settings.
 
 ---
 
-## Issues or feedback?
+## Issues, feedback, contributions
 
-Slack Selena Williams US (`sewilliams`) or text +1 702-503-3462 for urgent issues.
-
----
-
-## Appendix: Running via vLLM instead of llama.cpp
-
-```bash
-# B12x env vars
-export VLLM_NVFP4_GEMM_BACKEND=flashinfer-b12x
-export VLLM_USE_FLASHINFER_MOE_FP4=1
-export VLLM_FP8_MOE_BACKEND=flashinfer_cutlass   # route FP8 experts via cutlass; b12x is FP4-only
-export FLASHINFER_DISABLE_VERSION_CHECK=1
-export CUTE_DSL_ARCH=sm_121a                     # Spark GB10
-export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-
-vllm serve nvidia/Qwen3.6-35B-A3B-2.06GB-per-token \
-    --host 0.0.0.0 --port 30000 \
-    --tensor-parallel-size 1 --trust-remote-code --dtype auto \
-    --kv-cache-dtype fp8 --attention-backend FLASHINFER \
-    --gpu-memory-utilization 0.85 --max-model-len 65536 \
-    --max-num-seqs 4 --max-num-batched-tokens 8192 \
-    --enable-chunked-prefill --async-scheduling \
-    --moe-backend=flashinfer_b12x --quantization=modelopt \
-    --enable-prefix-caching \
-    --reasoning-parser qwen3 \
-    --compilation-config '{"pass_config":{"fuse_norm_quant":true,"fuse_act_quant":true,"fuse_attn_quant":false}}' \
-    --speculative-config '{"method":"mtp","num_speculative_tokens":3,"rejection_sample_method":"synthetic","synthetic_acceptance_length":3.12,"moe_backend":"triton"}'
-```
+Please feel free to raise a github issue or PR. 
 
 ---
 
