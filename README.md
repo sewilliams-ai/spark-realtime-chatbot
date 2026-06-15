@@ -282,3 +282,4 @@ Key files:
 - [Kokoro](https://github.com/hexgrad/kokoro) — TTS
 - [DeepFace](https://github.com/serengil/deepface) — face recognition
 - [Silero VAD](https://github.com/ricky0123/vad) — voice activity detection
+- NVIDIA Marketing Team: Thank you for your feedback during demo devlepment
