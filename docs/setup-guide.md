@@ -126,7 +126,7 @@ Each developer should run their own bot — sharing a token causes the bot to se
 3. Under **Token**, click **Reset Token** and copy the new token. (You can only view it once — save it somewhere safe.)
 4. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
 5. Go to **OAuth2 → URL Generator**. Select scopes: `bot`. Select bot permissions: `View Channels`, `Send Messages`, `Read Message History`. Copy the generated URL.
-6. Complete the installation instructions at this youtube video (00:2:57). Instead of saving the TOKEN in a .env file, save it as an environment variable (`DISCORD_BOT_TOKEN`), which we'll cover below. 
+6. Complete the installation instructions at [this youtube video (00:2:57)](https://youtu.be/hpegsgOmjgs?si=eNTFtz1l3MHdwoOh). Instead of saving the TOKEN in a .env file, save it as an environment variable (`DISCORD_BOT_TOKEN`), which we'll cover below. 
 
 ### Run the Discord bot server
 
