@@ -14,7 +14,7 @@ This is only a product launch hero page that advertises the product.
 
 Hero copy:
 The copmonent selection agent for
-rapid prototyping
+rapid hardware prototyping
 
 Turn product ideas into chip recommendations before you build.
 
