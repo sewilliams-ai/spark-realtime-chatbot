@@ -11,67 +11,9 @@ A voice + vision AI assistant running locally on DGX Spark — streaming speech 
 - **Agentic**: streaming multi-turn tool-call loop (filesystem, Python sandbox, web search, memory)
 - **Face recognition**: DeepFace enrollment + identification in video-call mode
 
-**Benchmarked on DGX Spark (warm, Q4_K_M Qwen3.6-35B-A3B via llama.cpp, N=5)**
-
-| Path | TTFT (median) | End-to-end (median) |
-|------|---------------|---------------------|
-| Voice turn (effort=none) | ~225 ms | ~365 ms |
-| Video turn (image+text, effort=none) | ~880 ms | ~1340 ms |
-| Tool-call roundtrip (1 tool declared) | ~840 ms | ~840 ms |
-| Agent loop (LLM → run_python → LLM) | ~1550 ms | ~1860 ms |
-| Reasoning turn (effort=high, ~4k chars thinking) | — | ~20 s |
-
-Reproduce:
-```
-python3 bench/bench.py --trials 5 --out bench/after.json
-python3 bench/diff.py bench/baseline.json bench/after.json
-python3 bench/test_tools.py        # e2e smoke for every inline tool
-python3 bench/test_agent_loop.py   # e2e parallel-dispatch / math / memory
-```
-
-**Full-stack end-to-end** (WebSocket `text_message` → Qwen3.6 → Kokoro TTS → audio, warm):
-
-| | Total |
-|--|--|
-| text → final_response text → first TTS chunk | **~1.1 s** |
-
-Reproduce:
-```
-docker build -f bench/Dockerfile.tts -t realtime2-tts .
-docker run -d --gpus all --network host --ipc=host \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -v $(pwd):/workspace/realtime2 -w /workspace/realtime2 \
-  --name rt2 realtime2-tts \
-  uvicorn server:app --host 0.0.0.0 --port 8453
-docker exec rt2 python bench/test_ws_text.py --url ws://localhost:8453/ws/voice \
-  --text "What is 2+2 in one word?"
-```
-
-**TTS backend benchmark** (GB10, N=3 per sentence, torch 2.11 + CUDA 13.0 wheels):
-
-| Sentence length | Kokoro **CUDA** TTFT | Kokoro CPU TTFT | Chatterbox CUDA TTFT |
-|---|---|---|---|
-| 15 chars | **39 ms** | 476 ms | 793 ms |
-| 31 chars | **42 ms** | 783 ms | 1134 ms |
-| 81 chars | **78 ms** | 1224 ms | 2148 ms |
-| 189 chars | **158 ms** | 2098 ms | 4741 ms |
-
-Kokoro CUDA runs at RTF ~0.015 (≈ 65× realtime) on GB10 when torch uses the **cu130** wheels — the cu128 wheels ship without sm_121/sm_120 kernels and fall back to torch nvrtc JIT, which crashes on Blackwell. `TTS_DEVICE=cuda` is the default. Chatterbox-Turbo sounds better subjectively but is 2–3× slower per utterance and has no native streaming — kept as an opt-in backend via `TTS_ENGINE=chatterbox`.
-
-Bench harness:
-```
-docker build -f bench/Dockerfile.tts -t realtime2-tts .
-docker run --rm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -v $(pwd):/workspace/realtime2 -w /workspace/realtime2 \
-  realtime2-tts python bench/bench_tts.py --trials 3 --out bench/tts.json
-```
-
----
-
 ## Quick Start
 
-Two processes run side by side: a **llama.cpp** model server (`:30000`) and the **HTTPS frontend** (`:8443`); a **Discord bot** is optional. This is the condensed path — for the full walkthrough (building llama.cpp, Discord bot setup, vLLM alternative), see **[docs/setup-guide.md](docs/setup-guide.md)**.
+Three processes run side by side: a **llama.cpp** model server (`:30000`), the **HTTPS frontend** (`:8443`); and an optoinal **Discord bot**.
 
 ### Prerequisites
 
