@@ -13,8 +13,8 @@ This is only a product launch hero page that advertises the product.
 ## Layout
 
 Hero copy:
-The harness for
-rapid hardware prototyping
+The copmonent selection agent for
+rapid prototyping
 
 Turn product ideas into chip recommendations before you build.
 
