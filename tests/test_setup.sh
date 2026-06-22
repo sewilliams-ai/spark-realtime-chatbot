@@ -114,6 +114,12 @@ EOF
 echo "/tmp/fakehf/${@: -1}"
 EOF
 
+    # curl: stand in for the Discord /users/@me lookup with a fake application id.
+    cat > "$bin/curl" <<'EOF'
+#!/usr/bin/env bash
+echo '{"id":"123456789012345678","username":"test-bot","bot":true}'
+EOF
+
     # pip: installing the CTranslate2 python bindings drops a site-packages dir.
     cat > "$bin/pip" <<'EOF'
 #!/usr/bin/env bash
@@ -138,6 +144,7 @@ case "$*" in
         cp "$d/bin/python" "$d/bin/python3"
         printf ':\n' > "$d/bin/activate"; exit 0;;
     *discord-bot.py*)               # keep discord-bot.py in argv for pgrep -f
+        echo "Logged in as test-bot#0001"   # setup.sh waits for this line
         trap 'kill $(jobs -p) 2>/dev/null; exit 0' TERM INT
         sleep 300 & wait;;
     *)
@@ -197,10 +204,12 @@ assert_contains "$out" "TOK=hf_pasted_value" "hf token: exports pasted value"
 teardown
 
 new_sandbox
-out="$(printf 'my-bot-token\n' | ( source "$SCRIPT_UNDER_TEST"; configure_discord_token; echo "DT=$DISCORD_BOT_TOKEN" ) 2>&1)"
+out="$(printf 'my-bot-token\n' | ( source "$SCRIPT_UNDER_TEST"; configure_discord_token; echo "DT=$DISCORD_BOT_TOKEN"; echo "URL=$DISCORD_INVITE_URL" ) 2>&1)"
 assert_contains "$out" "New Application" "discord token: prints bot-creation instructions"
 assert_contains "$out" "Message Content Intent" "discord token: mentions required intent"
 assert_contains "$out" "DT=my-bot-token" "discord token: exports pasted token"
+assert_contains "$out" "client_id=123456789012345678" "discord token: builds invite URL from the bot's client id"
+assert_contains "$out" "URL=https://discord.com/oauth2/authorize" "discord token: exports DISCORD_INVITE_URL"
 teardown
 
 # ==========================================================================
@@ -258,10 +267,38 @@ cleanup_servers
 teardown
 
 new_sandbox
-( source "$SCRIPT_UNDER_TEST"; export DISCORD_BOT_TOKEN=tok; launch_discord ) >/dev/null 2>&1
+out="$(( source "$SCRIPT_UNDER_TEST"; export DISCORD_BOT_TOKEN=tok; launch_discord ) 2>&1)"
 assert_pgrep "discord-bot.py" "launch: discord bot process running"
 assert_file "$LOG_DIR/discord.log" "launch: discord.log written"
+assert_contains "$out" "logged in and running" "launch: discord readiness waits for actual login"
 cleanup_servers
+teardown
+
+# ==========================================================================
+# Phase 3b: idempotency & teardown
+# ==========================================================================
+echo "Phase 3b: idempotency & teardown"
+
+# A second launch_llama skips when something is already serving the port.
+new_sandbox
+( source "$SCRIPT_UNDER_TEST"; install_llama_cpp; download_models; launch_llama ) >/dev/null 2>&1
+out="$(( source "$SCRIPT_UNDER_TEST"; install_llama_cpp; download_models; launch_llama ) 2>&1)"
+assert_contains "$out" "already serving on :30000" "idempotency: re-run skips launch when port is up"
+cleanup_servers
+teardown
+
+# stop.sh stops all three servers (artifacts untouched).
+new_sandbox
+STOP_SH="$(dirname "$SCRIPT_UNDER_TEST")/stop.sh"
+( source "$SCRIPT_UNDER_TEST"; install_llama_cpp; download_models; launch_llama
+  export DEMO_PARTNER=wife; launch_https
+  export DISCORD_BOT_TOKEN=tok; launch_discord ) >/dev/null 2>&1
+assert_port 30000 "stop: llama up before stop"
+bash "$STOP_SH" >/dev/null 2>&1
+sleep 1
+nc -z -w 2 localhost 30000 2>/dev/null && fail "stop: llama stopped" "still listening" || pass "stop: llama stopped"
+nc -z -w 2 localhost 8443  2>/dev/null && fail "stop: HTTPS stopped" "still listening" || pass "stop: HTTPS stopped"
+pgrep -f discord-bot.py >/dev/null && fail "stop: discord stopped" "still running" || pass "stop: discord stopped"
 teardown
 
 # ==========================================================================
@@ -272,8 +309,13 @@ echo "End-to-end"
 new_sandbox
 out="$(printf '\nwife\nmy-hf-token\nmy-discord-token\n' \
     | env -u HF_TOKEN bash "$SCRIPT_UNDER_TEST" 2>&1)"
+assert_contains "$out" "Final step - add discord bot to server" "e2e: shows final Discord step before READY"
 assert_contains "$out" "[READY] Setup complete!" "e2e: prints [READY] after all servers up"
 assert_contains "$out" "https://localhost:8443" "e2e: tells user where to open the browser"
+assert_contains "$out" "client_id=123456789012345678" "e2e: prints personalized invite URL"
+assert_contains "$out" "If accessing this machine remotely" "e2e: includes remote-IP note"
+assert_contains "$out" "discord.com/channels/@me" "e2e: prints general Discord servers link for testing"
+assert_contains "$out" "./stop.sh" "e2e: mentions stop.sh"
 assert_port 30000 "e2e: llama.cpp up"
 assert_port 8443  "e2e: HTTPS up"
 assert_pgrep "discord-bot.py" "e2e: discord bot up"

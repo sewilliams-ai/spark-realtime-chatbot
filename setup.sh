@@ -27,6 +27,9 @@ LLAMA_CPP_COMMIT="${LLAMA_CPP_COMMIT:-255582687b8dd211fdbc582e43ab842491554e94}"
 # How long launch steps wait for a server port to come up.
 SETUP_PORT_TIMEOUT="${SETUP_PORT_TIMEOUT:-90}"
 
+# How long to wait for the Discord bot to log in before declaring failure.
+SETUP_DISCORD_TIMEOUT="${SETUP_DISCORD_TIMEOUT:-120}"
+
 # ----------------------------------------------------------------------------
 # Logging helpers (ANSI colors auto-disabled when stdout is not a TTY)
 # ----------------------------------------------------------------------------
@@ -98,16 +101,31 @@ print_discord_instructions() {
     cat <<'EOF'
 
 --------------------------------------------------------------------------
- Create your Discord bot (browser-only — cannot be scripted):
+ Discord setup (browser-only — these steps cannot be scripted):
 
-   1. Visit https://discord.com/developers/applications -> New Application
-   2. Open the "Bot" tab -> Reset Token -> copy the token
-   3. Under Privileged Gateway Intents, enable "Message Content Intent"
-   4. OAuth2 -> URL Generator:
-        scopes:      bot
-        permissions: View Channels, Send Messages, Read Message History
-      Copy the generated invite URL and use it to invite the bot to your
-      server.
+ A. Create a server to host the bot:
+    1. Go to https://discord.com/channels/@me
+    2. Click "Add a Server" (the + button in the left sidebar)
+    3. Choose "Create My Own" -> "For me and my friends"
+
+ B. Create your own bot application:
+    1. Visit https://discord.com/developers/applications -> New Application
+    2. Open the "Bot" tab -> Reset Token -> copy the token (paste it below)
+    3. In the bot tab under "Privileged Gateway Intents", enable
+       "Message Content Intent", then Save Changes.
+       REQUIRED: this bot reads message text. Without this toggle the bot
+       crashes on startup with PrivilegedIntentsRequired. It is free to
+       enable for bots in fewer than 100 servers.
+    4. In the bot tab, scroll down to "Bot Permissions" and enable
+       "Send Messages".
+
+ C. Add YOUR bot to YOUR server:
+    1. After you paste the token below, this script validates it and prints a
+       personalized invite URL for your bot (no manual OAuth2 URL Generator
+       step needed).
+    2. Open that URL, select the server you created in step A, click
+       "Authorize", and finish the captcha.
+    3. Send the bot a message in that server to confirm it replies.
 --------------------------------------------------------------------------
 EOF
 }
@@ -118,6 +136,27 @@ configure_discord_token() {
     read -r DISCORD_BOT_TOKEN
     export DISCORD_BOT_TOKEN
     log_ok "Discord bot token captured."
+    build_discord_invite_url
+}
+
+# Derive the bot's application (client) ID from its own token and build a
+# ready-to-use invite URL with exactly the permissions this bot needs. Each
+# operator gets a URL for THEIR bot, so the setup is fully portable — nothing
+# server- or bot-specific is hardcoded. Also validates the token (a bad token
+# returns no id).
+build_discord_invite_url() {
+    # View Channels(1024) + Send Messages(2048) + Read Message History(65536)
+    local perms=68608 appid
+    appid="$(curl -fsS -H "Authorization: Bot $DISCORD_BOT_TOKEN" \
+        https://discord.com/api/v10/users/@me 2>/dev/null \
+        | grep -oE '"id"[[:space:]]*:[[:space:]]*"[0-9]+"' \
+        | grep -oE '[0-9]+' | head -1)"
+    [ -n "$appid" ] || die "Could not validate the Discord bot token (check the token and your network connection — the Discord API returned no application id)."
+    DISCORD_INVITE_URL="https://discord.com/oauth2/authorize?client_id=${appid}&permissions=${perms}&scope=bot"
+    export DISCORD_INVITE_URL
+    log_ok "Validated token — your bot's application id is ${appid}."
+    printf '\n%s[ACTION]%s Invite YOUR bot to YOUR server by opening this URL:\n  %s\n\n' \
+        "$C_YELLOW" "$C_RESET" "$DISCORD_INVITE_URL"
 }
 
 # ----------------------------------------------------------------------------
@@ -219,6 +258,10 @@ wait_for_port() {
 }
 
 launch_llama() {
+    if nc -z -w 2 localhost 30000 2>/dev/null; then
+        log_ok "llama.cpp already serving on :30000, skipping launch."
+        return 0
+    fi
     mkdir -p "$LOG_DIR"
     log_install "Starting llama.cpp server on :30000 (logs -> $LOG_DIR/llama.log)..."
     ( cd "$LLAMA_CPP_DIR" && exec ./build/bin/llama-server \
@@ -228,33 +271,79 @@ launch_llama() {
         --n-gpu-layers 99 --ctx-size 16384 \
         --chat-template-kwargs '{"enable_thinking": false}' --threads 8 \
     ) >"$LOG_DIR/llama.log" 2>&1 &
+    echo $! > "$LOG_DIR/llama.pid"
     wait_for_port 30000 "llama.cpp server"
 }
 
 launch_https() {
+    if nc -z -w 2 localhost 8443 2>/dev/null; then
+        log_ok "HTTPS server already serving on :8443, skipping launch."
+        return 0
+    fi
     mkdir -p "$LOG_DIR"
     log_install "Starting HTTPS frontend on :8443 (logs -> $LOG_DIR/https.log)..."
     ( cd "$REPO_DIR" && DEMO_PARTNER="$DEMO_PARTNER" exec ./launch-https.sh --local-asr \
     ) >"$LOG_DIR/https.log" 2>&1 &
+    echo $! > "$LOG_DIR/https.pid"
     wait_for_port 8443 "HTTPS server"
 }
 
 launch_discord() {
+    if pgrep -f "clients/discord-bot.py" >/dev/null; then
+        log_ok "Discord bot already running, skipping launch."
+        return 0
+    fi
     mkdir -p "$LOG_DIR"
     log_install "Starting Discord bot (logs -> $LOG_DIR/discord.log)..."
-    ( cd "$REPO_DIR" && DISCORD_BOT_TOKEN="$DISCORD_BOT_TOKEN" exec python3 clients/discord-bot.py \
+    : > "$LOG_DIR/discord.log"
+    # PYTHONUNBUFFERED so the bot's log (incl. "Logged in as") flushes promptly.
+    ( cd "$REPO_DIR" && DISCORD_BOT_TOKEN="$DISCORD_BOT_TOKEN" PYTHONUNBUFFERED=1 \
+        exec python3 clients/discord-bot.py \
     ) >"$LOG_DIR/discord.log" 2>&1 &
-    sleep 2
-    pgrep -f discord-bot.py >/dev/null \
-        || die "Discord bot failed to start (see $LOG_DIR/discord.log)"
-    log_ok "Discord bot is running."
+    local pid=$!
+    echo "$pid" > "$LOG_DIR/discord.pid"
+
+    # The process exists long before it connects (heavy imports + Whisper load),
+    # so a bare pgrep would report a false success. Wait until it actually logs
+    # in, and surface the real error from the log if it dies or never connects.
+    local waited=0
+    until grep -q "Logged in as" "$LOG_DIR/discord.log" 2>/dev/null; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            log_error "Discord bot exited during startup — last log lines:"
+            tail -n 20 "$LOG_DIR/discord.log" >&2
+            die "Discord bot failed to start (common causes: bad DISCORD_BOT_TOKEN, or Message Content Intent not enabled in the developer portal)"
+        fi
+        sleep 2
+        waited=$((waited + 2))
+        if [ "$waited" -ge "$SETUP_DISCORD_TIMEOUT" ]; then
+            log_error "Discord bot did not log in within ${SETUP_DISCORD_TIMEOUT}s — last log lines:"
+            tail -n 20 "$LOG_DIR/discord.log" >&2
+            die "Discord bot failed to connect (check the token, network, and Message Content Intent)"
+        fi
+    done
+    log_ok "Discord bot logged in and running."
 }
 
 print_ready() {
+    local ip
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+
+    printf '\nFinal step - add discord bot to server:\n'
+    if [ -n "${DISCORD_INVITE_URL:-}" ]; then
+        echo "  -> If the bot isn't in your server yet, invite it: $DISCORD_INVITE_URL"
+    fi
+    echo "  -> Discord bot is running — send it a message in your server to confirm"
+    echo "     Access your Discord servers here: https://discord.com/channels/@me"
+
     printf '\n%s[READY]%s Setup complete!\n' "$C_GREEN" "$C_RESET"
-    echo "  -> Open https://localhost:8443 in your browser (accept the self-signed cert)"
+    echo "  -> Open https://localhost:8443 in your browser to access the web app (accept the self-signed cert)"
+    if [ -n "$ip" ]; then
+        echo "     If accessing this machine remotely, use https://$ip:8443 instead"
+    else
+        echo "     If accessing this machine remotely, replace 'localhost' with the machine's local IP"
+    fi
     echo "  -> Allow microphone access when prompted"
-    echo "  -> Discord bot is running — send it a message to confirm"
+    echo "  -> To stop all servers (keeping models/build): ./stop.sh"
 }
 
 # ----------------------------------------------------------------------------

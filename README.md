@@ -21,7 +21,9 @@ cd spark-realtime-chatbot
 ./setup.sh
 ```
 
-The script will walk you through configuration, download models, build dependencies, and launch all three servers. Open https://localhost:8443 when it finishes.
+The script will walk you through configuration (including creating your own Discord bot and printing a personalized invite link), download models, build dependencies, and launch all three servers. Open https://localhost:8443 when it finishes.
+
+To stop everything later — keeping models and builds intact — run `./stop.sh`. Re-running `./setup.sh` is safe; it skips already-completed steps.
 
 For troubleshooting, FAQs, and Ollama backend instructions, see [SETUP.md](SETUP.md).
 

@@ -90,6 +90,8 @@ client = discord.Client(intents=intents)
 @client.event
 async def on_ready():
     print(f'Logged in as {client.user}')
+    guilds = [f"{g.name!r} (id={g.id})" for g in client.guilds]
+    print(f"--- [guilds] in {len(guilds)} server(s): {guilds or 'NONE — bot is not in any server'}")
 
 @client.event
 async def on_message(message):

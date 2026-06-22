@@ -18,7 +18,7 @@ Manual setup mirrors what `setup.sh` does:
 
 - **Part 1.** Set up the llama.cpp server — download HF models, build llama.cpp, run the server
 - **Part 2.** Set up the demo repo — install dependencies, run the HTTPS server
-- **Part 3.** Set up Discord — create your own bot, run the Discord bot server
+- **Part 3.** Set up Discord — create your own server + bot, invite it (setup.sh prints a personalized URL), run the bot
 
 ## Prerequisites
 
@@ -115,24 +115,35 @@ Then open **https://localhost:8443**, accept the self-signed certificate, and al
 
 ## Part 3. Set up Discord
 
+This setup is portable: each developer creates **their own** server and **their own** bot. Nothing here hardcodes a specific server or bot — `setup.sh` derives everything from the token you paste.
+
 ### Create your own Discord server
 
-In the Discord app, click the **+** in the server list and choose **Create My Own** → **For me and my friends**. You'll invite your bot here, so you need a server where you have **Manage Server** permission — your own server gives you that. For step-by-step help, see Discord's [How do I create a server?](https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server).
+Go to https://discord.com/channels/@me, click **Add a Server** (the **+** in the left sidebar), and choose **Create My Own** → **For me and my friends**. You'll invite your bot here, so you need a server where you have **Manage Server** permission — your own server gives you that.
 
 ### Create your own Discord bot
 
-Each developer should run their own bot — sharing a token causes the bot to send duplicate responses (see FAQ) and is a security risk.
+Each developer runs their **own** bot — sharing a token causes the bot to send duplicate responses (see FAQ) and is a security risk. These steps are browser-only and cannot be scripted.
 
 1. Visit https://discord.com/developers/applications and click **New Application**.
-2. In your application, open the **Bot** tab — a bot user is created automatically with the application.
-3. Under **Token**, click **Reset Token** and copy the new token. (You can only view it once — save it somewhere safe.)
-4. Under **Privileged Gateway Intents**, enable **Message Content Intent**.
-5. Go to **OAuth2 → URL Generator**. Select scopes: `bot`. Select bot permissions: `View Channels`, `Send Messages`, `Read Message History`. Copy the generated URL and use it to invite the bot to your server.
-6. Complete the installation instructions at [this youtube video (00:2:57)](https://youtu.be/hpegsgOmjgs?si=eNTFtz1l3MHdwoOh). Instead of saving the TOKEN in a .env file, save it as an environment variable (`DISCORD_BOT_TOKEN`), which we'll cover below.
+2. Open the **Bot** tab — a bot user is created automatically with the application.
+3. Under **Token**, click **Reset Token** and copy the new token. (You can only view it once.) You'll paste it into `setup.sh`.
+4. In the **Bot** tab under **Privileged Gateway Intents**, enable **Message Content Intent**, then **Save Changes**. **Required:** the bot reads message text; without this toggle it crashes on startup with `PrivilegedIntentsRequired`. It's free to enable for bots in fewer than 100 servers.
+5. In the **Bot** tab under **Bot Permissions**, enable **Send Messages**.
 
-> Discord bot creation requires a browser login and cannot be scripted — this is the one step `setup.sh` pauses for you to complete by hand.
+You do **not** need the OAuth2 URL Generator. When you paste the token, `setup.sh` validates it, derives your bot's client ID, and prints a personalized invite URL with exactly the permissions this bot needs (View Channels + Send Messages + Read Message History).
 
-### Run the Discord bot server
+### Add your bot to your server
+
+1. `setup.sh` prints an invite URL like:
+   ```
+   https://discord.com/oauth2/authorize?client_id=<your-bot>&permissions=68608&scope=bot
+   ```
+   (To build it by hand instead: take your **Application ID** from the **General Information** tab and substitute it for `<your-bot>`.)
+2. Open the URL, select the server you created above, click **Authorize**, and finish the captcha.
+3. Send the bot a message in that server to confirm it replies. The `--- [guilds] ...` line in `logs/discord.log` lists which servers the bot joined.
+
+### Run the Discord bot server (manual)
 
 ```bash
 # cd path/to/spark-realtime-chatbot
@@ -146,10 +157,30 @@ Send a sample message to the bot in your Discord server to confirm it responds.
 
 ---
 
+## Stopping and restarting
+
+Stop all three servers without deleting any artifacts — downloaded models, the venv, and the llama.cpp build are left intact:
+
+```bash
+./stop.sh
+```
+
+It stops the processes recorded in `logs/*.pid` (falling back to matching by listening port / process name). To restart, just run `./setup.sh` again.
+
+`setup.sh` is **idempotent** — re-running it is safe:
+
+- The venv, llama.cpp build, and downloaded models are reused if already present (no re-download, no rebuild).
+- `pip install -r requirements.txt` re-runs, but is a fast no-op once dependencies are satisfied.
+- Each server is skipped if it's already up (port already listening, or the bot process already running), so re-running won't spawn duplicates.
+
+---
+
 ## Troubleshooting
 
 - **`--ctx-size` too small** — keep llama.cpp's `--ctx-size` at 16384 or higher. The default (4096) silently truncates long prompts and destabilizes generation.
 - **Server didn't come up** — `setup.sh` writes per-server logs to `logs/llama.log`, `logs/https.log`, and `logs/discord.log`. Check those first.
+- **Discord bot crashes instantly / missing from `nvidia-smi` / never replies** — almost always **Message Content Intent** is not enabled in the Developer Portal; the log shows `PrivilegedIntentsRequired`. Enable it (Bot tab → Privileged Gateway Intents → Message Content Intent → Save Changes) and restart. No token reset is needed.
+- **Bot is online but silent in one server** — a bot only receives messages from servers it has been *invited* to. Re-open the invite URL `setup.sh` printed and authorize the bot into that specific server. The `--- [guilds] ...` line in `logs/discord.log` shows which servers it actually joined.
 - **Self-signed certificate warning** — expected on first load of https://localhost:8443. Accept it in the browser.
 - **Microphone blocked** — the browser must be granted microphone access; reload and allow when prompted.
 
