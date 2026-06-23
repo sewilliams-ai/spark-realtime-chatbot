@@ -168,7 +168,16 @@ install_venv() {
         log_ok "Python virtual environment already exists, skipping creation."
     else
         log_install "Creating Python virtual environment..."
-        python3 -m venv "$VENV_DIR" || die "failed: python3 -m venv $VENV_DIR"
+        # The dependency set (kokoro, pandas, deepface, ...) only ships prebuilt
+        # wheels for Python 3.10-3.12. On 3.13 pip falls back to source builds
+        # that fail to compile, so prefer a 3.12 interpreter when available.
+        local py
+        for py in python3.12 python3.11 python3.10 python3; do
+            if command -v "$py" >/dev/null 2>&1; then
+                "$py" -m venv "$VENV_DIR" && break
+            fi
+        done
+        [ -x "$VENV_DIR/bin/python" ] || die "failed to create venv $VENV_DIR"
     fi
     # shellcheck disable=SC1091
     source "$VENV_DIR/bin/activate" || die "failed to activate venv"
