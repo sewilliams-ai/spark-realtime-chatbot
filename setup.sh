@@ -187,9 +187,21 @@ install_venv() {
 }
 
 install_llama_cpp() {
-    if [ -x "$LLAMA_CPP_DIR/build/bin/llama-server" ]; then
-        log_ok "llama.cpp already built, skipping."
+    # The launch flags below (--spec-draft-*) and MTP speculative decoding only
+    # exist at $LLAMA_CPP_COMMIT. A pre-existing llama.cpp checkout/build at any
+    # other revision (common on a machine that's already used llama.cpp) would
+    # be silently reused and reject those flags, so gate the "skip" on the build
+    # actually being at the pinned commit — not merely on a binary existing.
+    local head=""
+    if [ -d "$LLAMA_CPP_DIR/.git" ]; then
+        head="$(git -C "$LLAMA_CPP_DIR" rev-parse HEAD 2>/dev/null || true)"
+    fi
+    if [ -x "$LLAMA_CPP_DIR/build/bin/llama-server" ] && [ "$head" = "$LLAMA_CPP_COMMIT" ]; then
+        log_ok "llama.cpp already built at pinned commit, skipping."
         return 0
+    fi
+    if [ -x "$LLAMA_CPP_DIR/build/bin/llama-server" ]; then
+        log_info "Existing llama.cpp is at ${head:-unknown}, not the pinned commit — rebuilding."
     fi
     log_install "Building llama.cpp @ $LLAMA_CPP_COMMIT..."
     if [ ! -d "$LLAMA_CPP_DIR/.git" ]; then
@@ -198,7 +210,10 @@ install_llama_cpp() {
     fi
     git -C "$LLAMA_CPP_DIR" fetch --quiet origin "$LLAMA_CPP_COMMIT" 2>/dev/null || true
     git -C "$LLAMA_CPP_DIR" checkout "$LLAMA_CPP_COMMIT" \
-        || die "failed: git checkout $LLAMA_CPP_COMMIT"
+        || die "failed: git checkout $LLAMA_CPP_COMMIT (could not fetch the pinned llama.cpp commit — check your network)"
+    # Configure from scratch so a build dir left over from a different commit
+    # can't poison the new build with stale CMake cache entries.
+    rm -rf "$LLAMA_CPP_DIR/build"
     cmake -S "$LLAMA_CPP_DIR" -B "$LLAMA_CPP_DIR/build" -DGGML_CUDA=ON \
         || die "failed: cmake configure (llama.cpp)"
     cmake --build "$LLAMA_CPP_DIR/build" --config Release -j --target llama-server \
@@ -223,22 +238,50 @@ download_models() {
 }
 
 install_ctranslate2() {
-    if compgen -G "$VENV_DIR"/lib/python*/site-packages/ctranslate2 >/dev/null; then
-        log_ok "CTranslate2 already installed, skipping build."
+    # faster-whisper (a requirements.txt dep) installs the PyPI ctranslate2
+    # wheel, which on ARM (all DGX Sparks) is built WITHOUT CUDA. Skipping just
+    # because *some* ctranslate2 is importable leaves that CPU-only build in
+    # place, and the ASR model load then crashes with "not compiled with CUDA
+    # support". So skip only when the installed build actually has CUDA — probe
+    # it directly rather than checking for the package's mere presence.
+    if "$VENV_DIR/bin/python" -c \
+        'import ctranslate2; ctranslate2.get_supported_compute_types("cuda")' \
+        >/dev/null 2>&1; then
+        log_ok "CUDA-enabled CTranslate2 already installed, skipping build."
         return 0
     fi
     log_install "Building CUDA-enabled CTranslate2 for local ASR..."
     export CUDAARCHS=121
     mkdir -p "$REPO_DIR/build"
     local ct2="$REPO_DIR/build/CTranslate2"
-    [ -d "$ct2/.git" ] || git clone --recursive \
-        https://github.com/OpenNMT/CTranslate2.git "$ct2" || die "failed: git clone CTranslate2"
+    # Pin to v4.8.0: it's the same version as the PyPI ctranslate2 that
+    # faster-whisper resolves to (so a later `pip install -r requirements.txt`
+    # won't pull the CPU wheel back over this build), it satisfies
+    # faster-whisper's ctranslate2<5 constraint, and it makes the CMake patch
+    # below deterministic instead of tracking a moving master branch.
+    if [ ! -d "$ct2/.git" ]; then
+        git clone https://github.com/OpenNMT/CTranslate2.git "$ct2" \
+            || die "failed: git clone CTranslate2"
+    fi
+    git -C "$ct2" fetch --quiet --tags origin 2>/dev/null || true
+    # -f so a CMakeLists.txt left patched by a previous failed run is reset,
+    # keeping the sed below idempotent.
+    git -C "$ct2" checkout -f v4.8.0 || die "failed: git checkout CTranslate2 v4.8.0"
+    git -C "$ct2" submodule update --init --recursive \
+        || die "failed: CTranslate2 submodules"
 
-    # CMake doesn't know Blackwell (sm_121): comment out the arch autodetect and
-    # hard-code the gencode flag. (No-op if already patched on a re-run.)
-    sed -i 's/cuda_select_nvcc_arch_flags/#cuda_select_nvcc_arch_flags/' "$ct2/CMakeLists.txt"
-    sed -i 's/list(APPEND CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS_READABLE})/list(APPEND CUDA_NVCC_FLAGS "-gencode=arch=compute_121,code=sm_121")/' "$ct2/CMakeLists.txt"
+    # CTranslate2's bundled cuda_select_nvcc_arch_flags() doesn't know Blackwell
+    # (sm_121, the GB10 in DGX Spark), so replace the arch autodetect with a
+    # hard-coded gencode. The downstream `list(APPEND CUDA_NVCC_FLAGS
+    # ${ARCH_FLAGS})` then picks it up.
+    sed -i 's|cuda_select_nvcc_arch_flags(ARCH_FLAGS ${CUDA_ARCH_LIST})|set(ARCH_FLAGS "-gencode=arch=compute_121,code=sm_121")|' \
+        "$ct2/CMakeLists.txt"
+    grep -q 'arch=compute_121,code=sm_121' "$ct2/CMakeLists.txt" \
+        || die "CTranslate2 CMake arch patch did not apply (upstream CMakeLists.txt changed)"
 
+    # Configure from scratch so a build dir from a prior attempt can't reuse a
+    # stale CMake cache.
+    rm -rf "$ct2/build"
     mkdir -p "$ct2/build"
     ( cd "$ct2/build" && cmake .. \
         -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_CUDNN=OFF \
@@ -246,7 +289,10 @@ install_ctranslate2() {
         && make -j"$(nproc)" ) || die "failed to build CTranslate2"
     ( cd "$ct2/build" && sudo make install && sudo ldconfig ) \
         || die "failed to install CTranslate2"
-    pip install "$ct2/python" || die "failed: pip install CTranslate2 python bindings"
+    # --force-reinstall --no-deps so this CUDA build replaces the CPU-only PyPI
+    # wheel even though they share the version number 4.8.0.
+    pip install --force-reinstall --no-deps "$ct2/python" \
+        || die "failed: pip install CTranslate2 python bindings"
     log_ok "CTranslate2 installed."
 }
 
